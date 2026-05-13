@@ -1,0 +1,178 @@
+# organisational unit for IT department
+dn: ou=IT,dc=example,dc=org
+objectClass: organizationalUnit
+objectClass: top
+ou: IT
+
+# user: Sreypich Un
+dn: uid=sreypich,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Sreypich Un
+sn: Un
+uid: sreypich
+mail: sreypich.un@example.org
+userPassword: password222
+
+# user: Chan Thyda
+dn: uid=chan.thyda,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Chan Thyda
+sn: Thyda
+uid: chan.thyda
+mail: chan.thyda@example.org
+userPassword: password222
+
+# user: Wathrak
+dn: uid=wathrak,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Wathrak
+sn: Wathrak
+uid: wathrak
+mail: wathrak@example.org
+userPassword: password333
+
+# user: John Doe
+dn: uid=johndoe,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: John Doe
+sn: Doe
+uid: johndoe
+mail: johndoe@example.org
+userPassword: password123
+
+# user: Anna Meier
+dn: uid=anna.meier,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Anna Meier
+sn: Meier
+uid: anna.meier
+mail: anna.meier@example.org
+userPassword: password456
+
+# organisational unit for Marketing department
+dn: ou=Marketing,dc=example,dc=org
+objectClass: organizationalUnit
+objectClass: top
+ou: Marketing
+
+# user: Peter Schmidt
+dn: uid=peter.schmidt,ou=Marketing,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Peter Schmidt
+sn: Schmidt
+uid: peter.schmidt
+mail: peter.schmidt@example.org
+userPassword: password789
+
+# user: Leng Kimtry
+dn: uid=leng.kimtry,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Leng Kimtry
+sn: Kimtry
+uid: leng.kimtry
+mail: leng.kimtry@example.org
+userPassword: password001
+
+# user: Sethi Sak
+dn: uid=sethi.sak,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Sethi Sak
+sn: Sak
+uid: sethi.sak
+mail: sethi.sak@example.org
+userPassword: password002
+
+# user: Sophal Theany
+dn: uid=sophal.theany,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Sophal Theany
+sn: Theany
+uid: sophal.theany
+mail: sophal.theany@example.org
+userPassword: password003
+
+# user: Davann
+dn: uid=davann,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Davann
+sn: Davann
+uid: davann
+mail: davann@example.org
+userPassword: password004
+
+# user: Gechhai
+dn: uid=gechhai,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Gechhai
+sn: Gechhai
+uid: gechhai
+mail: gechhai@example.org
+userPassword: password005
+
+# user: Boranich
+dn: uid=boranich,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Boranich
+sn: Boranich
+uid: boranich
+mail: boranich@example.org
+userPassword: password006
+
+# user: Someth
+dn: uid=someth,ou=IT,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: top
+cn: Someth
+sn: Someth
+uid: someth
+mail: someth@example.org
+userPassword: password007
+
+# Super Admin Role group
+dn: cn=SuperAdmin,dc=example,dc=org
+objectClass: groupOfNames
+objectClass: top
+cn: SuperAdmin
+member: uid=sreypich,ou=IT,dc=example,dc=org
+member: uid=chan.thyda,ou=IT,dc=example,dc=org
+member: uid=leng.kimtry,ou=IT,dc=example,dc=org
+
+# Admin Role group
+dn: cn=Admin,dc=example,dc=org
+objectClass: groupOfNames
+objectClass: top
+cn: Admin
+member: uid=wathrak,ou=IT,dc=example,dc=org
+member: uid=sethi.sak,ou=IT,dc=example,dc=org
+member: uid=sophal.theany,ou=IT,dc=example,dc=org
+
+# User Download group
+dn: cn=UserDownload,dc=example,dc=org
+objectClass: groupOfNames
+objectClass: top
+cn: UserDownload
+member: uid=johndoe,ou=IT,dc=example,dc=org
+member: uid=anna.meier,ou=IT,dc=example,dc=org
+member: uid=davann,ou=IT,dc=example,dc=org
+member: uid=gechhai,ou=IT,dc=example,dc=org
+
+# User group
+dn: cn=User,dc=example,dc=org
+objectClass: groupOfNames
+objectClass: top
+cn: User
+member: uid=peter.schmidt,ou=Marketing,dc=example,dc=org
+member: uid=boranich,ou=IT,dc=example,dc=org
+member: uid=someth,ou=IT,dc=example,dc=org

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ document.title }} | Secure Preview</title>
+    <style>
+        :root {
+            --bg: #f3ede2;
+            --surface: #fffdf7;
+            --paper: #ffffff;
+            --ink: #1f1a14;
+            --muted: #7c6f60;
+            --accent: #b6592d;
+            --border: rgba(31, 26, 20, 0.12);
+            --shadow: 0 24px 50px rgba(78, 54, 28, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background:
+                radial-gradient(circle at top, rgba(182, 89, 45, 0.14), transparent 34%),
+                linear-gradient(180deg, #f8f2e8 0%, var(--bg) 100%);
+            color: var(--ink);
+            font-family: Georgia, "Times New Roman", serif;
+        }
+
+        .shell {
+            width: min(1080px, calc(100vw - 32px));
+            margin: 0 auto;
+            padding: 32px 0 48px;
+        }
+
+        .masthead {
+            display: grid;
+            gap: 18px;
+            margin-bottom: 24px;
+            padding: 24px;
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            background: rgba(255, 253, 247, 0.88);
+            backdrop-filter: blur(8px);
+            box-shadow: var(--shadow);
+        }
+
+        .eyebrow {
+            margin: 0 0 10px;
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(28px, 5vw, 42px);
+            line-height: 1.05;
+        }
+
+        .meta {
+            margin: 12px 0 0;
+            color: var(--muted);
+            font-size: 15px;
+        }
+
+        .notice {
+            max-width: 28rem;
+            padding: 14px 16px;
+            border-left: 4px solid var(--accent);
+            border-radius: 16px;
+            background: rgba(182, 89, 45, 0.08);
+            color: var(--ink);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .pages {
+            display: grid;
+            gap: 24px;
+        }
+
+        .page {
+            position: relative;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            border-radius: 26px;
+            background: var(--paper);
+            box-shadow: var(--shadow);
+        }
+
+        .page::before {
+            content: attr(data-watermark);
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+            color: rgba(182, 89, 45, 0.16);
+            font-size: clamp(24px, 5vw, 56px);
+            font-weight: 700;
+            letter-spacing: 0.2em;
+            text-align: center;
+            text-transform: uppercase;
+            transform: rotate(-28deg);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .page-label {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            z-index: 2;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(31, 26, 20, 0.78);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .page img {
+            display: block;
+            width: 100%;
+            height: auto;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        .text-preview {
+            position: relative;
+            z-index: 2;
+            margin: 0;
+            padding: 28px;
+            overflow-x: auto;
+            color: var(--ink);
+            font-family: "Courier New", monospace;
+            font-size: 14px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+        }
+
+        @media (max-width: 720px) {
+            .shell {
+                width: min(100vw - 20px, 1080px);
+                padding-top: 18px;
+            }
+
+            .masthead {
+                padding: 18px;
+                border-radius: 20px;
+            }
+
+            .page,
+            .page::before {
+                border-radius: 20px;
+            }
+
+            .text-preview {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="shell">
+        <header class="masthead">
+            <div>
+                <p class="eyebrow">Secure Preview</p>
+                <h1>{{ document.title }}</h1>
+                <p class="meta">
+                    {{ document.original_filename }}
+                    {% if page_count %}
+                    | {{ page_count }} page{{ page_count|pluralize }}
+                    {% endif %}
+                </p>
+            </div>
+            <div class="notice">
+                View-only mode is active. This viewer blocks common save and print shortcuts, and it never sends the original document file to the browser.
+            </div>
+        </header>
+
+        {% if preview_mode == "text" %}
+        <section class="page" data-watermark="{{ watermark_text }}">
+            <pre class="text-preview">{{ preview_text }}</pre>
+        </section>
+        {% else %}
+        <section class="pages">
+            {% for page in page_urls %}
+            <article class="page" data-watermark="{{ watermark_text }}">
+                <div class="page-label">Page {{ page.number }}</div>
+                <img src="{{ page.url }}" alt="Page {{ page.number }} preview" loading="lazy" draggable="false">
+            </article>
+            {% endfor %}
+        </section>
+        {% endif %}
+    </main>
+
+    <script>
+        (function () {
+            const blockedKeys = new Set(["s", "p"]);
+
+            window.addEventListener("keydown", function (event) {
+                const key = (event.key || "").toLowerCase();
+                if ((event.ctrlKey || event.metaKey) && blockedKeys.has(key)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+            }, { capture: true });
+
+            document.addEventListener("contextmenu", function (event) {
+                event.preventDefault();
+            });
+
+            document.querySelectorAll("img").forEach(function (image) {
+                image.addEventListener("dragstart", function (event) {
+                    event.preventDefault();
+                });
+            });
+        }());
+    </script>
+</body>
+</html>
