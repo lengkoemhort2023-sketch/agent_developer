@@ -6,19 +6,22 @@ from sentence_transformers import util
 import torch
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+import concurrent.futures
+import base64
 from langchain_core.messages import HumanMessage
 from langchain_core.documents import Document as LangChainDocument
 from langchain_qdrant import QdrantVectorStore
 import os
 import uuid
 import time
+import ast, requests
 import numpy as np
+import tempfile
 import logging
 import json
 from typing import List, Dict, Any, Optional
 import re
 import psutil
-import markdown as py_markdown
 
 
 def cleanup_bold_colon(text: str) -> str:
@@ -48,16 +51,115 @@ def cleanup_bold_colon(text: str) -> str:
     text = re.sub(r'\*\*\s*[:៖]\s*\*\*\s*:', '៖', text)
     return text
 import gc
+import threading
+from queue import Queue
+from functools import wraps
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 qdrant_host = settings.QDRANT_HOST
 qdrant_port = settings.QDRANT_PORT
+BASE_BACKEND_URL = settings.DJANGO_HOST_URL
 from .token_logger import TokenLogger
 
 # Add logging configuration
 logger = logging.getLogger(__name__)
 
-LEGACY_DISPLAY_THRESHOLD_KM = 0.57
-LEGACY_DISPLAY_THRESHOLD_EN = 0.57
+LEGACY_DISPLAY_THRESHOLD_KM = 0.05
+LEGACY_DISPLAY_THRESHOLD_EN = 0.05
+
+
+def build_media_url(path: str) -> str:
+    """Normalize a stored media path into a browser-consumable URL."""
+    if not path:
+        return path
+    if re.match(r"^https?://", path):
+        return path
+
+    normalized_path = path.lstrip("/")
+    media_url = (settings.MEDIA_URL or "").rstrip("/")
+    if media_url:
+        if normalized_path.startswith(media_url.lstrip("/")):
+            return f"/{normalized_path}"
+        return f"{media_url}/{normalized_path}"
+    return f"/{normalized_path}"
+
+
+def normalize_image_urls(images: Optional[List[str]]) -> List[str]:
+    """Return unique image URLs while preserving order."""
+    if not images:
+        return []
+
+    seen = set()
+    normalized = []
+    for image in images:
+        if not image:
+            continue
+        url = build_media_url(str(image).strip())
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        normalized.append(url)
+    return normalized
+
+
+def extract_markdown_image_urls(text: str) -> List[str]:
+    """Extract image URLs from markdown image syntax."""
+    if not text:
+        return []
+    matches = re.findall(r'!\[[^\]]*\]\(([^)]+)\)', text)
+    return normalize_image_urls(matches)
+
+
+def ensure_image_markdown(text: str, image_urls: Optional[List[str]]) -> str:
+    """Append missing markdown image refs so the frontend can render images."""
+    normalized_images = normalize_image_urls(image_urls)
+    if not normalized_images:
+        return text
+
+    existing_images = set(extract_markdown_image_urls(text))
+    missing_images = [url for url in normalized_images if url not in existing_images]
+    if not missing_images:
+        return text
+
+    image_markdown = "\n\n".join(
+        f"![Document image {index + 1}]({url})"
+        for index, url in enumerate(missing_images)
+    )
+    if not text:
+        return image_markdown
+    return f"{text.rstrip()}\n\n{image_markdown}"
+
+
+def format_answer_chunk(chunk: Dict[str, Any], chunk_text: Optional[str] = None) -> str:
+    """Render a retrieved chunk for answer display while preserving image block placement."""
+    text = (chunk_text if chunk_text is not None else chunk.get("text", "")) or ""
+    text = text.strip()
+    header = (chunk.get("header") or "").strip()
+    content_type = str(chunk.get("content_type") or "text").strip().lower()
+    image_urls = normalize_image_urls(chunk.get("images", []))
+
+    if content_type == "image" and image_urls:
+        image_alt_text = (chunk.get("image_alt_text") or "").strip()
+        label = image_alt_text or header or "Document image"
+        image_markdown = "\n\n".join(
+            f"![{label}]({url})"
+            for url in image_urls
+        )
+
+        parts = []
+        if header and header != "Content":
+            parts.append(f"**{header}**")
+        parts.append(image_markdown)
+        return "\n\n".join(part for part in parts if part)
+
+    if header and header != "Content":
+        body = re.sub(r'^#+\s*' + re.escape(header) + r'\s*\n*', '', text, count=1)
+        if body.lstrip().startswith(header):
+            body = body.lstrip()[len(header):].lstrip('\n').lstrip()
+        return f"**{header}**\n\n{body.strip()}" if body.strip() else f"**{header}**"
+
+    return text
 
 
 def strip_mention_prefix(text: str) -> str:
@@ -71,22 +173,6 @@ def strip_mention_prefix(text: str) -> str:
         if updated == cleaned:
             return cleaned
         cleaned = updated
-
-
-def normalize_user_query(text: str) -> str:
-    """Normalize user query text (mentions, hidden chars, whitespace)."""
-    if not text:
-        return ""
-
-    cleaned = strip_mention_prefix(text)
-    # Remove zero-width/control formatting chars that often appear in copied headers.
-    cleaned = re.sub(r'[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]', '', cleaned)
-    # Normalize tabs/newlines/non-breaking spaces into regular spaces.
-    cleaned = cleaned.replace('\u00A0', ' ').replace('\t', ' ').replace('\r', ' ').replace('\n', ' ')
-    # Normalize token separators that often appear in pasted identifiers.
-    cleaned = cleaned.replace('_', ' ')
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    return cleaned
 
 # Production optimization: Limit numpy threads to prevent memory bloat
 os.environ['OMP_NUM_THREADS'] = '2'
@@ -241,35 +327,38 @@ class MemoryManager:
         
         return False
 
+class OllamaConnectionManager:
+    """Manage Ollama connections with retry logic"""
+    def __init__(self, model: str, timeout: int = 30, max_retries: int = 3):
+        self.model = model
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.session = self._create_session()
+
+    def _create_session(self):
+        """Create requests session with retry strategy"""
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=self.max_retries,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+
+    def get_session(self):
+        """Get configured session"""
+        return self.session
+
 class ResponseGenerationService:
     """ RAG Service for question answering using retrieved chunks"""
-
-    _DEFAULT_LLM_CONTENT_PROMPT_TEMPLATE = (
-        "You are an expert Q&A assistant. "
-        "Your task is to answer the user's question based *strictly* on the provided context.\n\n"
-        "**Instructions:**\n"
-        "1.  **Locate the relevant section**: Scan the context and identify ONLY the part "
-        "that directly answers the question. The context may contain many sections — "
-        "do NOT return everything, only the matching section.\n"
-        "2.  **Return that section verbatim**: Once you have identified the relevant "
-        "section, copy it EXACTLY as it appears — including all list items, table rows, "
-        "and formatting. Do NOT summarise, shorten, paraphrase, or reformat it.\n"
-        "3.  **Use ONLY the provided context**: If the answer is not in the context, "
-        "respond with \"I am sorry, but the answer to your question is not available "
-        "in the provided context.\"\n"
-        "4.  **Do not use prior knowledge**: Your response must be grounded entirely in "
-        "the text provided.\n"
-        "5.  **No padding**: Do not add introductions, conclusions, or any text that is "
-        "not part of the extracted answer itself.\n\n"
-        "**Context:**\n{body}\n\n"
-        "**User Question:**\n{question}\n\n"
-        "**Answer:**"
-    )
 
     def __init__(self):
         if not hasattr(self, '_initialized'):
             self._initialized = True
-            self.llm_content_prompt_template = self._DEFAULT_LLM_CONTENT_PROMPT_TEMPLATE
             try:
                 self.vector_service = VectorStoreService()
             except Exception as e:
@@ -326,22 +415,18 @@ class ResponseGenerationService:
 
             # Note: For history, we'll use direct Qdrant operations
 
-            llm_num_ctx = max(1024, int(getattr(settings, "OLLAMA_NUM_CTX", 16384) or 16384))
-            llm_num_predict = max(
-                128,
-                int(getattr(settings, "OLLAMA_NUM_PREDICT", 1024) or 1024),
-            )
-            llm_temperature = float(getattr(settings, "OLLAMA_TEMPERATURE", 0.1) or 0.1)
+            # Initialize Ollama connection manager
+            self.ollama_manager = OllamaConnectionManager(settings.OLLAMA_MODEL)
             self.llm = ChatOllama(
                 model=settings.OLLAMA_MODEL,
                 base_url=settings.OLLAMA_BASE_URL,
-                temperature=llm_temperature,
-                num_ctx=llm_num_ctx,
-                num_predict=llm_num_predict,
+                temperature=0.1,
+                num_ctx=32768,
+                num_predict=4096,
             )
             logger.info(
                 f"Ollama LLM initialized successfully with model: {settings.OLLAMA_MODEL}, "
-                f"num_ctx={llm_num_ctx}, num_predict={llm_num_predict}, temperature={llm_temperature}"
+                "num_ctx=32768, num_predict=4096"
             )
 
             # Initialize AgenticRAG (replaces single-pass get_related_docs)
@@ -446,9 +531,7 @@ class ResponseGenerationService:
             km = detected in ('km', 'multi')
             lang_name = "Khmer" if km else "English"
 
-            # -- Build context blocks: header + 50-word snippet ---------------
-            # Using 50 words instead of 200 to avoid exhausting num_predict tokens
-            # (the model has OLLAMA_NUM_PREDICT=1024 and needs room for output)
+            # -- Build context blocks: header + 200-word snippet ---------------
             context_blocks = []
             for ans in (top_answers or [])[:max(count + 2, 6)]:
                 if not isinstance(ans, dict):
@@ -457,8 +540,9 @@ class ResponseGenerationService:
                 header = (ans.get('header') or '').strip()
                 text = (ans.get('text') or '').strip()
 
+                # Truncate text to ~200 words
                 words = text.split()
-                snippet = ' '.join(words[:50])
+                snippet = ' '.join(words[:200])
 
                 if header or snippet:
                     block = f"[{header}]\n{snippet}" if header else snippet
@@ -470,49 +554,37 @@ class ResponseGenerationService:
 
             context_text = "\n\n---\n\n".join(context_blocks)
 
-            def _llm_call(prompt_lang: str, attempt_label: str) -> str:
-                """Make an LLM call and return cleaned response text."""
-                prompt = (
-                    f"You are a helpful Q&A assistant. Based on the document sections below, "
-                    f"generate exactly {count} short follow-up questions in {prompt_lang} "
-                    f"that a user might want to ask next after asking:\n"
-                    f"\"{question}\"\n\n"
-                    f"Document sections:\n{context_text}\n\n"
-                    f"Rules:\n"
-                    f"- Every question MUST be written in {prompt_lang} only.\n"
-                    f"- Thai language is strictly forbidden in the output.\n"
-                    f"- Do NOT use any Thai characters.\n"
-                    f"- Each question must be under 15 words.\n"
-                    f"- Questions must be directly based on the sections above.\n"
-                    f"- Output ONLY a JSON array of strings: [\"Q1\", \"Q2\", ...].\n"
-                    f"- No numbering, no explanation, no extra text.\n\n"
-                    f"If {prompt_lang} is Thai, automatically use English instead.\n\n"
-                    f"JSON array:"
-                )
-                logger.info(
-                    f"Generating {count} follow-up questions via LLM "
-                    f"(lang={prompt_lang}, attempt={attempt_label})"
-                )
-                resp = self.llm.invoke([HumanMessage(content=prompt)])
-                raw = (resp.content or "").strip()
-                # Strip <think>...</think> blocks
-                raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL | re.IGNORECASE).strip()
-                # Strip markdown fences
-                raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.IGNORECASE)
-                raw = re.sub(r'\s*```$', '', raw).strip()
-                logger.debug(
-                    f"Follow-up LLM raw output (attempt={attempt_label}): "
-                    f"{'<EMPTY>' if not raw else raw[:300]}"
-                )
-                return raw
+            prompt = (
+                f"You are a helpful Q&A assistant. Based on the document sections below, "
+                f"generate exactly {count} short follow-up questions in {lang_name} "
+                f"that a user might want to ask next after asking:\n"
+                f"\"{question}\"\n\n"
+                f"Document sections:\n{context_text}\n\n"
+                f"Rules:\n"
+                f"- Every question MUST be written in {lang_name} only.\n"
+                f"- Thai language is strictly forbidden in the output.\n"
+                f"- Do NOT use any Thai characters.\n"
+                f"- Each question must be under 15 words.\n"
+                f"- Questions must be directly based on the sections above.\n"
+                f"- Output ONLY a JSON array of strings: [\"Q1\", \"Q2\", ...].\n"
+                f"- No numbering, no explanation, no extra text.\n\n"
+                f"If {lang_name} is Thai, automatically use English instead.\n\n"
+                f"JSON array:"
+            )
 
-            # Attempt 1: original detected language
-            resp_text = _llm_call(lang_name, "1-detected-lang")
+            logger.info(f"Generating {count} follow-up questions via LLM (lang={language})")
+            resp = self.llm.invoke([HumanMessage(content=prompt)])
+            resp_text = (resp.content or "").strip()
 
-            # Attempt 2: if empty and language was Khmer, retry with English
-            if not resp_text and km:
-                logger.info("LLM returned empty for Khmer; retrying with English")
-                resp_text = _llm_call("English", "2-english-fallback")
+            # -- Parse LLM output ----------------------------------------------
+            # Strip <think>...</think> blocks produced by reasoning/thinking models
+            resp_text = re.sub(r'<think>.*?</think>', '', resp_text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+            # Strip markdown fences
+            resp_text = re.sub(r'^```(?:json)?\s*', '', resp_text, flags=re.IGNORECASE)
+            resp_text = re.sub(r'\s*```$', '', resp_text).strip()
+
+            logger.debug(f"Follow-up LLM raw output (after cleanup): {resp_text[:300]}")
 
             # JSON array parse find the LAST valid JSON array in the response
             # (using greedy search so we skip any partial arrays in preamble text)
@@ -550,62 +622,7 @@ class ResponseGenerationService:
             if cleaned:
                 return cleaned[:count]
 
-            # Last resort: try splitting by common delimiters in case LLM output is dense
-            if not cleaned:
-                parts = re.split(r'[?\n]+', resp_text)
-                for part in parts:
-                    part = part.strip().strip("[]\"',")
-                    part = re.sub(r'^[\-\d\.\)\s]+', '', part).strip()
-                    if part and len(part) > 10:
-                        if not part.endswith('?'):
-                            part += '?'
-                        cleaned.append(part)
-                        if len(cleaned) >= count:
-                            break
-                cleaned = self._sanitize_followup_questions(cleaned, count)
-                if cleaned:
-                    return cleaned[:count]
-
-            # Ultra-last-resort: split by comma (LLM sometimes outputs comma-separated values
-            # instead of proper JSON or line-by-line)
-            if not cleaned:
-                parts = resp_text.split(",")
-                for part in parts:
-                    part = part.strip().strip("[]\"'`\n\r")
-                    part = re.sub(r'^[\-\d\.\)\s]+', '', part).strip()
-                    if part and len(part) > 10:
-                        if not part.endswith('?'):
-                            part += '?'
-                        cleaned.append(part)
-                        if len(cleaned) >= count:
-                            break
-                cleaned = self._sanitize_followup_questions(cleaned, count)
-                if cleaned:
-                    return cleaned[:count]
-
             logger.warning("LLM follow-up parse failed returning empty suggestions")
-
-            # Final fallback: generate suggestions from top_answers headers
-            # This works even when the LLM fails (returns empty/unparseable)
-            fallback_headers = []
-            for ans in (top_answers or [])[:count + 1]:
-                if not isinstance(ans, dict):
-                    continue
-                header = (ans.get('header') or '').strip()
-                text = (ans.get('text') or '').strip()
-                candidate = header or text[:80]
-                if candidate and len(candidate) > 10:
-                    fallback_headers.append(candidate)
-                if len(fallback_headers) >= count:
-                    break
-
-            if fallback_headers:
-                logger.info(
-                    f"Using header-based fallback suggestions ({len(fallback_headers)} items): "
-                    f"{fallback_headers}"
-                )
-                return fallback_headers[:count]
-
             return []
 
         except Exception as exc:
@@ -637,20 +654,24 @@ class ResponseGenerationService:
                     )
                     return (True, "Header-like short query, auto-accepted")
 
-            verification_prompt = f"""Evaluate whether the user query is related to ANY of the following departments:
+            # If the query contains any Khmer characters, accept it immediately.
+            # This covers pure Khmer ("km"), mixed Khmer+Latin ("multi"), and
+            # document section-header style queries like:
+            #   "(@All) | ?.?.? ??????????????????????????????????????????"
+            # LLM verification is unreliable for Khmer text, so we bypass it entirely.
+            has_khmer = any("\u1780" <= ch <= "\u17FF" for ch in user_input)
+            if has_khmer:
+                logger.info(f"Query verification ({detected_lang}): '{user_input}' -> True (Khmer content, auto-accepted)")
+                return (True, "Khmer content detected, auto-accepted")
 
-Core Banking System, Contact Center, Credit Business, Executive, Finance, Human Resources, Internal Audit, IT Infrastructure & Operation, Marketing and Communication, Product Development, Admin and Procurement, Risk Management, Research, Training and Development, Treasury, IT Security, Bancassurance, Management Information System, Legal and Compliance, Deposit and Service, Business, IT Project Management, Software Research and Development, Credit Underwriting, Operations, Digital Banking & Card Payment, Business Development, Supply Chain Financing Business, Credit Control, Research and Development, Agent and Digital Banking, Business Intelligent, Legal, Compliance
-
-Rules:
-- Approve if the query is clearly related to ANY of these departments (even indirectly)
-- Approve both English and Khmer queries
-- Reject if the query is unrelated (e.g., general chat, random topics, personal questions)
-- Reject if meaningless or gibberish
+            # English-only queries: use LLM to filter out gibberish
+            verification_prompt = f"""Evaluate if this is a real, meaningful query that makes sense to search for information.
 
 Query: "{user_input}"
 
-Answer ONLY:
-yes or no"""
+Respond with ONLY one word: "yes" or "no"
+- "yes" if it's a real/meaningful query
+- "no" if it's gibberish or meaningless"""
 
             response = self.llm.invoke([HumanMessage(content=verification_prompt)])
             response_text = response.content.strip().lower()
@@ -780,6 +801,10 @@ yes or no"""
                 # Fall through to standard logic below
         # ----------------------------------------------------------------------
 
+        # Detect if query is short (5 words or less)
+        word_count = len(question.split())
+        is_short_query = word_count <= 5
+        
         # Skip LLM expansion - use original query for testing
         search_query = question
         
@@ -818,7 +843,7 @@ yes or no"""
                 for result, score in results[:10]:  # Log first 10
                     source_val = result.metadata.get('source')
                     source_values.add(str(source_val))
-                logger.debug(f"Source values in results (first 10): {source_values}")
+                logger.info(f"DEBUG: Source values in results (first 10): {source_values}")
                 
                 filtered_results = []
                 for result, score in results:
@@ -827,44 +852,6 @@ yes or no"""
                         filtered_results.append((result, score))
                 results = filtered_results
                 logger.info(f"After doc_id filter: {len(results)} results")
-
-            # Guard against stale vectors that reference documents already deleted/inactive
-            # in the relational DB. These stale chunks can emit dead image URLs.
-            source_ids = {
-                str(result.metadata.get("source", "")).strip()
-                for result, _score in results
-                if str(result.metadata.get("source", "")).strip()
-            }
-            if source_ids:
-                try:
-                    from document.models import Document as DocModel
-
-                    active_source_ids = {
-                        str(value)
-                        for value in DocModel.objects.filter(
-                            id__in=list(source_ids),
-                            is_active=True,
-                        ).values_list("id", flat=True)
-                    }
-
-                    filtered_active_results = []
-                    dropped_chunks = 0
-                    for result, score in results:
-                        source_doc_id = str(result.metadata.get("source", "")).strip()
-                        if source_doc_id and source_doc_id not in active_source_ids:
-                            dropped_chunks += 1
-                            continue
-                        filtered_active_results.append((result, score))
-
-                    if dropped_chunks:
-                        logger.info(
-                            "Dropped %s stale chunks from non-active documents (sources=%s)",
-                            dropped_chunks,
-                            sorted(source_ids),
-                        )
-                    results = filtered_active_results
-                except Exception as e:
-                    logger.warning("Failed active-document filtering for retrieval results: %s", e)
 
             # Take top 5 results (score filtering removed for now)
             results = results[:5]
@@ -889,8 +876,6 @@ yes or no"""
 
                 # Check for different page number keys
                 page_num = result.metadata.get('page_number') or result.metadata.get('page') or 1
-                page_start = result.metadata.get('page_start') or page_num
-                page_end = result.metadata.get('page_end') or page_num
                 chunk_index = result.metadata.get('chunk_index', 0)
                 header = result.metadata.get('header', '')
                 header_level = result.metadata.get('header_level', 1)
@@ -898,35 +883,22 @@ yes or no"""
                 # Use page_content first (full content), fallback to content (may be truncated)
                 raw_content = result.metadata.get("page_content") or result.metadata.get("content") or result.page_content or ""
                 
-                logger.debug(f"get_related_docs: header='{header}', content length={len(raw_content)}")
+                logger.info(f"DEBUG get_related_docs: header='{header}', content length={len(raw_content)}")
                 
                 doc_chunks[doc_id].append({
                     "id": chunk_number,
                     "content": raw_content,
                     "page_content": raw_content,  # Store full content separately
-                    "html": result.metadata.get("html", ""),
-                    "page_image_url": result.metadata.get("page_image_url", ""),
-                    "page_image_path": result.metadata.get("page_image_path", ""),
-                    "inline_images": result.metadata.get("inline_images", []),
-                    "inline_image_urls": result.metadata.get("inline_image_urls", []),
-                    "inline_image_url": result.metadata.get("inline_image_url", ""),
-                    "inline_image_path": result.metadata.get("inline_image_path", ""),
-                    "inline_image_count": result.metadata.get("inline_image_count", 0),
-                    "image_directory_path": result.metadata.get("image_directory_path", ""),
-                    "image_directory_url": result.metadata.get("image_directory_url", ""),
-                    "image_manifest_path": result.metadata.get("image_manifest_path", ""),
-                    "image_manifest_url": result.metadata.get("image_manifest_url", ""),
                     "page": int(page_num),
-                    "page_start": int(page_start),
-                    "page_end": int(page_end),
-                    "page_confidence": result.metadata.get("page_confidence", ""),
-                    "page_method": result.metadata.get("page_method", ""),
                     "chunk_index": chunk_index,
                     "header": header,
                     "header_level": header_level,
                     "file_name": result.metadata.get('file_name', 'Document'),
                     "score": score,
                     "has_table": result.metadata.get('has_table', False),
+                    "content_type": result.metadata.get("content_type", "text"),
+                    "image_alt_text": result.metadata.get("image_alt_text", ""),
+                    "images": normalize_image_urls(result.metadata.get("images", [])),
                 })
                 doc_scores[doc_id].append(score)
 
@@ -983,7 +955,7 @@ yes or no"""
             collection_names = [name for name in collection_names 
                               if name not in [self.history_collection_name, self.inactive_history_collection_name]]
             
-            logger.debug(f"Available collections for search: {collection_names}")
+            logger.info(f"DEBUG: Available collections for search: {collection_names}")
             
             if not collection_names:
                 logger.warning("No collections available for search")
@@ -996,10 +968,10 @@ yes or no"""
 
         for collection_name in collection_names:
             try:
-                logger.debug(f"Searching collection: {collection_name}")
+                logger.info(f"DEBUG: Searching collection: {collection_name}")
                 # Use direct Qdrant search to preserve all payload fields
                 direct_results = self._search_single_collection_direct(collection_name, query, k, query_language)
-                logger.debug(f"Collection {collection_name} returned {len(direct_results)} results")
+                logger.info(f"DEBUG: Collection {collection_name} returned {len(direct_results)} results")
                 all_results.extend(direct_results)
             except Exception as e:
                 logger.error(f"Error searching collection {collection_name}: {e}")
@@ -1007,7 +979,7 @@ yes or no"""
 
         # Sort by score and take top k
         all_results.sort(key=lambda x: x[1], reverse=True)
-        logger.debug(f"Total results from all collections: {len(all_results)}")
+        logger.info(f"DEBUG: Total results from all collections: {len(all_results)}")
         return all_results[:k]  # Return tuples (doc, score) to match other search methods
 
     def _search_single_collection_direct(
@@ -1057,14 +1029,14 @@ yes or no"""
                         "source": payload.get("source"),
                         "file_name": payload.get("file_name"),
                         "page_number": payload.get("page_number"),
-                        "page_start": payload.get("page_start"),
-                        "page_end": payload.get("page_end"),
-                        "page_confidence": payload.get("page_confidence"),
-                        "page_method": payload.get("page_method"),
                         "file_type": collection_name,
                         "chunk_index": payload.get("chunk_index", 0),
                         "header": payload.get("header", ""),
-                        "html": payload.get("html", ""),
+                        "header_level": payload.get("header_level", 1),
+                        "has_table": payload.get("has_table", False),
+                        "content_type": payload.get("content_type", "text"),
+                        "image_alt_text": payload.get("image_alt_text", ""),
+                        "images": payload.get("images", []),
                     }
                 )
                 results.append((doc, score))
@@ -1088,6 +1060,14 @@ yes or no"""
         except Exception as e:
             logger.error(f"Fallback direct search also failed: {e}")
             return {}
+
+    def verify_documents(self, docs, question, query_id: str = None):
+        """
+        Document verification has been removed.
+        Always returns all documents as relevant.
+        """
+        logger.info("Document verification disabled - marking all documents as relevant")
+        return {doc_id: True for doc_id in docs.keys()}
 
     def reuse_history(self, question: str, question_embedded, language_name, session_id: str = None):
         # If we don't have embeddings available, skip history reuse gracefully
@@ -1177,12 +1157,12 @@ yes or no"""
                                 # Old format: plain text answer
                                 answer_list = [{"text": answer_data, "doc_id": "", "file_name": ""}]
                                 answer_data = {"answers": answer_list}
-                                logger.info("Migrated old string format to answers array")
+                                logger.info("? Migrated old string format to answers array")
                             elif isinstance(answer_data, dict) and "text" in answer_data:
                                 # Old format: dict with text field instead of answers
                                 answer_list = [answer_data]
                                 answer_data = {"answers": answer_list}
-                                logger.info("Migrated old dict format to answers array")
+                                logger.info("? Migrated old dict format to answers array")
                             else:
                                 logger.warning(f"Unknown history format, skipping: {answer_str}")
                                 continue
@@ -1198,9 +1178,7 @@ yes or no"""
                         # Remember the first valid history candidate (fallback)
                         if not first_history_candidate:
                             first_history_candidate = answer_data
-                            logger.debug(
-                                f"Candidate history found with {len(answer_data.get('document_references', []))} document references"
-                            )
+                            logger.info(f"? Candidate history found with {len(answer_data.get('document_references', []))} document references")
 
                         # Prefer history entries that contain per-answer document_reference(s)
                         has_per_answer_ref = False
@@ -1214,18 +1192,18 @@ yes or no"""
 
                         if has_per_answer_ref:
                             per_answer_history_candidate = answer_data
-                            logger.info("Found history entry containing per-answer document_reference; preferring this one")
+                            logger.info("? Found history entry containing per-answer document_reference; preferring this one")
                             break
 
             # Prefer per-answer history if found, otherwise fall back to first valid candidate
             if per_answer_history_candidate:
                 history_answer_data = per_answer_history_candidate
                 doc_refs_count = len(history_answer_data.get('document_references', [])) if isinstance(history_answer_data, dict) else 0
-                logger.info(f"Restored complete per-answer history data from history with {doc_refs_count} document references")
+                logger.info(f"? Restored complete per-answer history data from history with {doc_refs_count} document references")
             elif first_history_candidate and not history_answer_data:
                 history_answer_data = first_history_candidate
                 doc_refs_count = len(history_answer_data.get('document_references', [])) if isinstance(history_answer_data, dict) else 0
-                logger.info(f"Restored complete answer data from history with {doc_refs_count} document references")
+                logger.info(f"? Restored complete answer data from history with {doc_refs_count} document references")
 
              # Question verification is disabled - history reuse is disabled
             # if len(questions) < 5:
@@ -1312,8 +1290,12 @@ yes or no"""
             return True
 
         except Exception as e:
-            logger.error(f"Error in safe_historical_handling: {e}")
+            logger.error(f"Error in historical_handling: {e}")
             return False
+
+    def historical_handling(self, question: str, answer: str, question_id: str, session_id: str = None):
+        """ Handle historical data for the question and answer"""
+        return self.safe_historical_handling(question, answer, question_id, session_id)
 
     def deactivate_history(self, file_id: str, session_id: str = None):
         """ Move history answer to inactive collection"""
@@ -1473,15 +1455,106 @@ yes or no"""
                 result[doc_id] = True
         return result
 
+    def user_feedback(self, question_id: str, answer_index: int, is_relevant: int = 0):
+        """
+        Use feedback to update the history collection.
+        1: Relevant
+        0: Neutral
+        -1: Not Relevant
+        """
+        scroll_result = self.client.scroll(
+            collection_name=self.history_collection_name,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="id",
+                        match=models.MatchValue(value=str(question_id))
+                    )
+                ]
+            ),
+            limit=1
+        )
+        points = scroll_result[0]
+        if not points:
+            logger.warning("Not found in history collection")
+            return None
+
+        payload = points[0].payload
+        answers_str = payload["answer"]
+        try:
+            answers_json = json.loads(answers_str)
+            if isinstance(answers_json, dict) and "answers" in answers_json:
+                answers_list = answers_json["answers"]
+                for idx, answer in enumerate(answers_list):
+                    if answer.get("id") == answer_index:
+                        answers_list[idx]["is_relevant"] = is_relevant
+                # Preserve document_references that may be present either inside the answer JSON or as a top-level payload field
+                doc_refs = answers_json.get("document_references", payload.get("document_references", []))
+                payload["answer"] = json.dumps({"answers": answers_list, "document_references": doc_refs})
+                # Also keep top-level document_references for compatibility
+                if doc_refs:
+                    payload["document_references"] = doc_refs
+            else:
+                logger.warning(f"Unexpected answer format in user_feedback: {answers_str}")
+                return None
+        except Exception as e:
+            logger.error(f"Error decoding data in user_feedback: {e}, content: {answers_str}")
+            return None
+
+        # update point in the history collection
+        updated_point = models.PointStruct(
+            id=str(question_id),
+            vector=points[0].vector,
+            payload=payload
+        )
+        self.client.upsert(collection_name=self.history_collection_name, points=[updated_point])
+        return scroll_result
+
+    def get_file_from_media(self, file_id: str, user_token):
+        logger.info(f"Downloading file: {file_id}")
+
+        if not user_token:
+            logger.error("No user token provided")
+            return None
+
+        download_url = f"{BASE_BACKEND_URL}/api/documents/{file_id}/pdf"
+        headers = {"Authorization": f"Bearer {user_token}"}
+
+        try:
+            response = requests.get(download_url, headers=headers, timeout=30)
+            logger.info(f"Download URL response status: {response.status_code}")
+
+            if response.status_code == 200:
+                # Extract document name from file_id or response headers
+                doc_name = response.headers.get('content-disposition', f'{file_id}.pdf').split('filename=')[-1].strip('"')
+                
+                # Return styled PDF card HTML
+                pdf_card_html = f'''<div class="flex flex-col p-4 rounded-xl border border-gray-200 bg-white hover:bg-primary/5 hover:border-primary/30 transition-all duration-200 cursor-pointer group/doc">
+<div class="flex items-start gap-3 w-full">
+<div class="p-2 bg-primary/10 rounded-lg flex-shrink-0 group-hover/doc:bg-primary/20 transition-all">
+<img alt="PDF" loading="lazy" width="24" height="24" decoding="async" data-nimg="1" class="w-5 h-5" src="/PDFicon.svg" style="color: transparent;">
+</div>
+<div class="flex-1 min-w-0">
+<p class="text-sm font-semibold text-gray-900 truncate group-hover/doc:text-primary transition-colors">{doc_name}</p>
+<p class="text-xs text-gray-500 mt-1"><span class="font-semibold text-primary">PDF � </span>1 chunks</p>
+</div>
+<div class="text-primary opacity-0 group-hover/doc:opacity-100 transition-opacity text-lg">?</div>
+</div>
+</div>'''
+                return pdf_card_html
+            else:
+                logger.error(f"Failed to download file: {file_id} (status: {response.status_code})")
+                if response.text:
+                    logger.error(f"Response content: {response.text[:500]}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Exception during file download: {e}")
+            return None
     def _get_no_info_response(self, question_id: str, language_name: str, simplified_output: bool):
         no_info_message = "រកមិនឃើញព័ត៌មានពាក់ព័ន្ធទេ។ សូមសាកល្បងសួរជាភាសាអង់គ្លេសជំនួសវិញ។" if language_name == "Khmer" else "No relevant information found. Please try to ask in the Khmer language instead."
         if simplified_output:
-            return {
-                "answers": [no_info_message],
-                "combined_answer": no_info_message,
-                "language": language_name,
-                "document_references": []
-            }
+            return [no_info_message]
         return {
             "answers": [{
                 "question_id": question_id,
@@ -1496,6 +1569,11 @@ yes or no"""
         }
 
     def _get_user_display_score_threshold(self, detected_language: str, use_agentic_retrieval: bool) -> float:
+        if use_agentic_retrieval:
+            from ..config import CONFIDENCE_THRESHOLD_EN, CONFIDENCE_THRESHOLD_KM
+
+            return CONFIDENCE_THRESHOLD_KM if detected_language == "km" else CONFIDENCE_THRESHOLD_EN
+
         if detected_language == "km":
             return LEGACY_DISPLAY_THRESHOLD_KM
         return LEGACY_DISPLAY_THRESHOLD_EN
@@ -1505,20 +1583,16 @@ yes or no"""
         if not isinstance(item, dict):
             return 0.0
 
-        candidates = [item.get("score"), item.get("max_score")]
-        if isinstance(item.get("document_reference"), dict):
-            candidates.append(item["document_reference"].get("max_score"))
+        raw_score = item.get("score")
+        if raw_score in (None, ""):
+            raw_score = item.get("max_score")
+        if raw_score in (None, "") and isinstance(item.get("document_reference"), dict):
+            raw_score = item["document_reference"].get("max_score")
 
-        parsed_scores: List[float] = []
-        for value in candidates:
-            try:
-                parsed_scores.append(float(value))
-            except (TypeError, ValueError):
-                continue
-
-        if not parsed_scores:
+        try:
+            return float(raw_score or 0.0)
+        except (TypeError, ValueError):
             return 0.0
-        return max(parsed_scores)
 
     def _filter_user_visible_results(
         self,
@@ -1560,13 +1634,15 @@ yes or no"""
         """Post-process response text - minimal cleanup."""
         if not text or text.strip() == "NOT_FOUND":
             return text
-
+        
+        import re
+        
         # Fix malformed markup patterns like bRPO/b -> RPO
         text = re.sub(r'b([^/]+)/b', r'**\\1**', text)
-
+        
         # Clean up multiple spaces
         text = re.sub(r'[ \t]+', ' ', text)
-
+        
         return text.strip()
 
     def _is_html_table(self, text: str) -> bool:
@@ -1574,330 +1650,16 @@ yes or no"""
             return False
         return bool(re.search(r'<\s*(table|tr|td|th)\b', text, flags=re.IGNORECASE))
 
-    @staticmethod
-    def _looks_like_html(text: str) -> bool:
+    def _is_markdown_table(self, text: str) -> bool:
+        """Check if text contains markdown pipe tables."""
         if not text:
             return False
-        return bool(re.search(r'<\s*(div|p|table|ul|ol|li|img|h[1-6]|br|strong|em)\b', text, flags=re.IGNORECASE))
-
-    def _to_display_html(self, text: str) -> str:
-        value = (text or "").strip()
-        if not value:
-            return ""
-        if self._looks_like_html(value):
-            return value
-        try:
-            return py_markdown.markdown(
-                value,
-                extensions=["tables", "sane_lists", "nl2br"],
-                output_format="html5",
-            )
-        except Exception:
-            logger.warning("Failed converting markdown answer to HTML; returning raw text")
-            return value
-
-    @staticmethod
-    def _dedupe_markdown_images(text: str) -> str:
-        if not text:
-            return ""
-        seen: set[str] = set()
-        pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
-
-        def replacement(match: re.Match[str]) -> str:
-            src = (match.group(2) or "").strip()
-            if not src:
-                return match.group(0)
-            key = src.lower()
-            if key in seen:
-                return ""
-            seen.add(key)
-            return match.group(0)
-
-        output = pattern.sub(replacement, text)
-        return re.sub(r"\n{3,}", "\n\n", output).strip()
-
-    def _dedupe_images_in_display_html(self, text: str) -> str:
-        value = (text or "").strip()
-        if not value:
-            return ""
-
-        value = self._dedupe_markdown_images(value)
-        if not self._looks_like_html(value):
-            return value
-
-        seen: set[str] = set()
-        img_pattern = re.compile(
-            r'<img\b[^>]*\bsrc\s*=\s*["\']([^"\']+)["\'][^>]*>',
-            flags=re.IGNORECASE,
-        )
-
-        def replacement(match: re.Match[str]) -> str:
-            src = (match.group(1) or "").strip()
-            if not src:
-                return match.group(0)
-            key = src.lower()
-            if key in seen:
-                return ""
-            seen.add(key)
-            return match.group(0)
-
-        deduped = img_pattern.sub(replacement, value)
-        deduped = re.sub(r"<p>\s*</p>", "", deduped, flags=re.IGNORECASE)
-        deduped = re.sub(r"\n{3,}", "\n\n", deduped)
-        return deduped.strip()
-
-    def _strip_images_from_reference_html(self, text: str) -> str:
-        value = self._dedupe_images_in_display_html(text)
-        if not value:
-            return ""
-
-        # Remove markdown image syntax if present.
-        value = re.sub(r'!\[[^\]]*\]\(([^)]+)\)', '', value)
-        # Remove HTML <img ...> tags for source-document cards.
-        value = re.sub(r'<img\b[^>]*>', '', value, flags=re.IGNORECASE)
-        value = re.sub(r"<p>\s*</p>", "", value, flags=re.IGNORECASE)
-        value = re.sub(r"\n{3,}", "\n\n", value)
-        return value.strip()
-
-    @staticmethod
-    def _has_structured_markdown(text: str) -> bool:
-        value = (text or "").strip()
-        if not value:
-            return False
-        has_table = bool(re.search(r"(?:^|\n)\|.*\|(?:\n|$)", value))
-        has_list = bool(re.search(r"(?:^|\n)\s*(?:[-*+]\s+|\d+\.\s+)", value))
-        return has_table or has_list
-
-    def _strip_chunk_header_from_body(self, text: str, header: str) -> str:
-        body = (text or "").strip()
-        header = (header or "").strip()
-        if not body:
-            return ""
-        if header:
-            body = re.sub(r'^#+\s*' + re.escape(header) + r'\s*\n*', '', body, count=1)
-            if body.lstrip().startswith(header):
-                body = body.lstrip()[len(header):].lstrip('\n').lstrip()
-        return body.strip()
-
-    @staticmethod
-    def _contains_preamble_keyword(text: str) -> bool:
-        lowered = (text or "").lower()
-        return any(
-            k in lowered
-            for k in (
-                "preamble",
-                "preface",
-                "abbreviation",
-                "abbreviations",
-                "abbreviated",
-                "acronym",
-                "acronyms",
-                "short form",
-                "short forms",
-                "preamble line",
-                "preamble lines",
-                "preamble_lines",
-                "បុព្វកថា",
-                "អក្សរកាត់",
-            )
-        )
-
-    @staticmethod
-    def _contains_abbreviation_keyword(text: str) -> bool:
-        lowered = (text or "").lower()
-        return any(
-            k in lowered
-            for k in (
-                "abbreviation",
-                "abbreviations",
-                "abbreviated",
-                "acronym",
-                "acronyms",
-                "short form",
-                "short forms",
-                "អក្សរកាត់",
-            )
-        )
-
-    @staticmethod
-    def _is_no_answer_text(text: str) -> bool:
-        lowered = (text or "").lower()
-        no_answer_phrases = (
-            "not available",
-            "i am sorry",
-            "cannot find",
-            "not found",
-            "not in the provided context",
-            "does not contain",
-        )
-        return any(phrase in lowered for phrase in no_answer_phrases)
-
-    def _determine_query_focus(self, question: str, headers: List[str]) -> str:
-        """
-        Decide answer formatting strategy:
-          - header   : header + content
-          - content  : content + header
-          - preamble : llm_content extraction
-        """
-        normalized_q = normalize_user_query(question)
-        if not normalized_q:
-            return "content"
-
-        if self._contains_preamble_keyword(normalized_q):
-            return "preamble"
-
-        q_lower = normalized_q.lower()
-        has_meaningful_chars = bool(re.search(r"[a-z0-9\u1780-\u17ff]", q_lower))
-        if not has_meaningful_chars:
-            # Some clients/files can degrade Khmer text into "????...".
-            # In that case, prefer preamble route if any retrieved header hints preamble/abbreviations.
-            for header in headers:
-                if self._contains_preamble_keyword(header or ""):
-                    return "preamble"
-            return "content"
-
-        q_tokens = set(re.findall(r"[a-z0-9]+", q_lower))
-
-        for header in headers:
-            h = (header or "").strip()
-            if not h or h.lower() == "content":
-                continue
-            h_lower = h.lower()
-            if len(normalized_q) >= 4 and (q_lower in h_lower or h_lower in q_lower):
-                return "header"
-            h_tokens = set(re.findall(r"[a-z0-9]+", h_lower))
-            if q_tokens and h_tokens and len(q_tokens & h_tokens) >= max(2, len(q_tokens) // 2):
-                return "header"
-
-        return "content"
-
-    def _select_llm_content_chunk(self, chunks: List[Dict]) -> Dict:
-        """
-        Pick the best chunk for llm_content, prioritizing legacy behavior:
-        1) header == "Content"
-        2) preamble-like header/body
-        3) first available chunk
-        """
-        if not chunks:
-            return {}
-
-        for chunk in chunks:
-            if (chunk.get("header") or "").strip() == "Content":
-                return chunk
-
-        for chunk in chunks:
-            header = (chunk.get("header") or "")
-            text = (chunk.get("text") or "")
-            if self._contains_preamble_keyword(header) or self._contains_preamble_keyword(text):
-                return chunk
-
-        return chunks[0]
-
-    def _select_preamble_chunk(self, chunks: List[Dict], question: str = "") -> Dict:
-        """
-        Select the most likely preamble chunk with a deterministic fallback.
-
-        Priority:
-        1) Chunk whose header/text contains a preamble keyword.
-        2) Earliest chunk in document order (page, chunk_index), preferring header "Content".
-        """
-        if not chunks:
-            return {}
-
-        abbreviation_query = self._contains_abbreviation_keyword(question or "")
-
-        abbreviation_hits = [
-            chunk for chunk in chunks
-            if self._contains_abbreviation_keyword(chunk.get("header", ""))
-            or self._contains_abbreviation_keyword(chunk.get("text", ""))
-        ]
-        if abbreviation_query and abbreviation_hits:
-            pool = abbreviation_hits
-        else:
-            keyword_hits = [
-            chunk for chunk in chunks
-            if self._contains_preamble_keyword(chunk.get("header", ""))
-            or self._contains_preamble_keyword(chunk.get("text", ""))
-            ]
-            pool = keyword_hits or chunks
-
-        def chunk_sort_key(chunk: Dict) -> tuple:
-            ref = chunk.get("reference", {}) if isinstance(chunk, dict) else {}
-            header = (chunk.get("header") or "").strip() if isinstance(chunk, dict) else ""
-            page = ref.get("page", 10**9)
-            chunk_index = chunk.get("chunk_index", 10**9) if isinstance(chunk, dict) else 10**9
-            score = float(chunk.get("score", 0.0) or 0.0) if isinstance(chunk, dict) else 0.0
-            text = (chunk.get("text") or "") if isinstance(chunk, dict) else ""
-            has_table = 1 if self._has_structured_markdown(text) else 0
-            # Prefer Content header, then earliest page/index, then higher score.
-            # For abbreviation queries, prefer table-like chunks first.
-            table_rank = 0 if (abbreviation_query and has_table) else 1
-            return (table_rank, 0 if header == "Content" else 1, int(page), int(chunk_index), -score)
-
-        return sorted(pool, key=chunk_sort_key)[0]
-
-    @staticmethod
-    def _normalize_star_separated_table_list(text: str) -> str:
-        """
-        Convert single-line star-separated table content into markdown list lines.
-        Example:
-          'a * b * c' -> '- a\\n- b\\n- c'
-        """
-        value = (text or "").strip()
-        if not value or "*" not in value:
-            return value
-        # Skip already-structured HTML fragments.
-        if "<" in value and ">" in value:
-            return value
-
-        # Split only on standalone '*' separators (not '**bold**').
-        collapsed = re.sub(r"\s+", " ", value).strip()
-        parts = [
-            part.strip()
-            for part in re.split(r"\s+(?<!\*)\*(?!\*)\s+", collapsed)
-            if part.strip()
-        ]
-        cleaned_parts = []
-        for part in parts:
-            cleaned = re.sub(r"^\s*(?:[-•*]\s+)+", "", part).strip()
-            if cleaned:
-                cleaned_parts.append(cleaned)
-        parts = cleaned_parts
-
-        # Require multiple separators to avoid converting formulas like "A * B".
-        if len(parts) < 3:
-            return value
-
-        if parts[0].endswith((":", "៖")) and len(parts) > 2:
-            return parts[0] + "\n" + "\n".join(f"- {item}" for item in parts[1:])
-        return "\n".join(f"- {item}" for item in parts)
-
-    def _render_table_cell_inline_markdown(self, cell_text: str) -> str:
-        """Render inline markdown for a table header/cell value."""
-        value = cleanup_bold_colon((cell_text or "").strip())
-        normalized_value = self._normalize_star_separated_table_list(value)
-        force_dash_prefix = normalized_value != value
-        value = normalized_value
-        if not value:
-            return ""
-
-        try:
-            rendered = py_markdown.markdown(
-                value,
-                extensions=["sane_lists"],
-                output_format="html5",
-            ).strip()
-        except Exception:
-            return value
-
-        if force_dash_prefix and "<li" in rendered:
-            # Only inject a visible dash for plain-text list items.
-            rendered = re.sub(r"<li>\s*(?![-•<])", "<li>- ", rendered)
-
-        paragraph_match = re.fullmatch(r"<p>(.*)</p>", rendered, flags=re.DOTALL)
-        if paragraph_match:
-            return paragraph_match.group(1).strip()
-        return rendered
+        lines = text.splitlines()
+        pipe_lines = [l for l in lines if '|' in l]
+        # If at least 2 lines have pipes, likely a table
+        if len(pipe_lines) >= 2:
+            return True
+        return False
 
     def _convert_markdown_table_to_html(self, text: str) -> str:
         """Convert markdown pipe tables to HTML tables. More robust conversion."""
@@ -1905,79 +1667,93 @@ yes or no"""
             lines = text.splitlines()
             result_lines = []
             i = 0
-
+            
             while i < len(lines):
                 line = lines[i]
-
+                
+                # Check if this line looks like a table row (contains |)
                 if '|' in line and line.strip():
+                    # Gather all consecutive table lines
                     table_lines = []
                     while i < len(lines) and '|' in lines[i]:
                         table_lines.append(lines[i])
                         i += 1
-
+                    
+                    # Check if this is actually a table (at least 1 line with |)
                     if len(table_lines) >= 1:
+                        # Find the separator line (contains mostly - and | and :)
                         separator_idx = -1
                         for idx, tl in enumerate(table_lines):
                             stripped = tl.strip().replace('|', '').replace(' ', '').replace('-', '').replace(':', '')
                             if not stripped and ('-' in tl or ':' in tl):
                                 separator_idx = idx
                                 break
-
+                        
                         rows = []
                         header_cells = []
-
+                        
                         if separator_idx >= 0:
+                            # Standard markdown table with separator
+                            # If separator is at index 0, it means missing header
                             if separator_idx == 0:
                                 body_lines = table_lines[separator_idx + 1:]
+                                # Try to infer column count from the first body row
                                 if body_lines:
                                     first_row_cells = [c.strip() for c in body_lines[0].strip().strip('|').split('|')]
-                                    header_cells = [""] * len(first_row_cells)
+                                    header_cells = [""] * len(first_row_cells) # Empty headers
                             else:
                                 header_line = table_lines[0]
                                 body_lines = table_lines[separator_idx + 1:]
                                 header_cells = [c.strip() for c in header_line.strip().strip('|').split('|')]
-
+                            
+                            # Parse body
                             for bl in body_lines:
                                 cells = [c.strip() for c in bl.strip().strip('|').split('|')]
-                                if cells and any(c for c in cells):
+                                if cells and any(c for c in cells):  # Skip empty rows
                                     rows.append(cells)
+                                    
                         else:
+                            # No separator - might be a simple pipe-delimited table
+                            # Treat first row as header if it looks like one, or just body?
+                            # For safety, treat as body with empty header if ambiguous
+                            # But existing logic treated first row as header. Let's keep that but handle single row.
+                            
+                            # If only one line, it's ambiguous. But let's assume it's a row.
                             header_cells = [c.strip() for c in table_lines[0].strip().strip('|').split('|')]
                             body_lines = table_lines[1:]
-
+                            
                             for bl in body_lines:
                                 cells = [c.strip() for c in bl.strip().strip('|').split('|')]
                                 if cells and any(c for c in cells):
                                     rows.append(cells)
 
+                        # Build HTML table with inline styles
                         html = '<div style="overflow-x: auto;"><table style="width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.875rem;">\n'
-
+                        
+                        # Only render thead if we have non-empty headers
                         if header_cells and any(h for h in header_cells):
                             html += '<thead style="background-color: var(--primary); color: white;"><tr>\n'
                             for h in header_cells:
-                                rendered_header = self._render_table_cell_inline_markdown(h)
-                                html += f'<th style="border: 1px solid #dee2e6; padding: 0.75rem 1rem; text-align: left; font-weight: 600; white-space: normal; word-break: normal; overflow-wrap: break-word;">{rendered_header}</th>\n'
+                                html += f'<th style="border: 1px solid #dee2e6; padding: 0.75rem 1rem; text-align: left; font-weight: 600;">{h}</th>\n'
                             html += '</tr></thead>\n'
-
-                        num_cols = len(header_cells) if header_cells else (len(rows[0]) if rows else 0)
+                            
                         html += '<tbody>\n'
                         for row in rows:
-                            if num_cols:
-                                row = (row + [''] * num_cols)[:num_cols]
                             html += '<tr>\n'
                             for cell in row:
-                                rendered_cell = self._render_table_cell_inline_markdown(cell)
-                                html += f'<td style="border: 1px solid #dee2e6; padding: 0.75rem 1rem; background: white; color: #1a1a1a; font-weight: 500; white-space: normal; word-break: normal; overflow-wrap: break-word;">{rendered_cell}</td>\n'
+                                html += f'<td style="border: 1px solid #dee2e6; padding: 0.75rem 1rem; background: white; color: #1a1a1a; font-weight: 500;">{cell}</td>\n'
                             html += '</tr>\n'
-
+                        
                         html += '</tbody>\n</table></div>'
                         result_lines.append(html)
+
                     else:
+                        # Not enough lines for a table, keep original
                         result_lines.extend(table_lines)
                 else:
                     result_lines.append(line)
                     i += 1
-
+            
             return '\n'.join(result_lines)
         except Exception as e:
             logger.error(f"Error converting markdown table to HTML: {e}")
@@ -1985,7 +1761,7 @@ yes or no"""
 
     def llm_content(self, chunk_data: dict, question: str, language_name: str) -> str:
         """
-        Called when the top-1 retrieved chunk needs strict in-context extraction.
+        Called only when the top-1 retrieved chunk has header == 'Content'.
 
         The payload stores two fields:
           - 'content'      : clean body text (no markdown header prefix)
@@ -1993,15 +1769,12 @@ yes or no"""
 
         Flow:
           1. Use 'content' directly if present; otherwise strip the leading
-             "# Content " line from 'page_content'.
+             "# Content �" line from 'page_content'.
           2. Send body + question to LLM with a strict grounded-answer prompt.
-          3. Return the LLM answer, or an empty result if the answer is not
-             grounded in the provided context.
-          4. Convert markdown tables to HTML if present (matches production logic
-             so table cells containing sequences like **/** render literally
-             instead of being mis-parsed by the frontend markdown renderer).
+          3. Return the LLM answer, or the body text as fallback.
+          4. Convert markdown tables to HTML if present.
 
-        Chunks whose header != 'Content' never reach this function response()
+        Chunks whose header != 'Content' never reach this function � response()
         returns them as "**header**\n\nbody" directly (old method).
         """
         try:
@@ -2029,9 +1802,25 @@ yes or no"""
             logger.info(f"llm_content: body_length={len(body)}, question='{question[:80]}'")
 
             prompt = (
-                self.llm_content_prompt_template
-                .replace("{body}", body)
-                .replace("{question}", question)
+                "You are an expert Q&A assistant. "
+                "Your task is to answer the user's question based *strictly* on the provided context.\n\n"
+                "**Instructions:**\n"
+                "1.  **Locate the relevant section**: Scan the context and identify ONLY the part "
+                "that directly answers the question. The context may contain many sections � "
+                "do NOT return everything, only the matching section.\n"
+                "2.  **Return that section verbatim**: Once you have identified the relevant "
+                "section, copy it EXACTLY as it appears � including all list items, table rows, "
+                "and formatting. Do NOT summarise, shorten, paraphrase, or reformat it.\n"
+                "3.  **Use ONLY the provided context**: If the answer is not in the context, "
+                "respond with \"I am sorry, but the answer to your question is not available "
+                "in the provided context.\"\n"
+                "4.  **Do not use prior knowledge**: Your response must be grounded entirely in "
+                "the text provided.\n"
+                "5.  **No padding**: Do not add introductions, conclusions, or any text that is "
+                "not part of the extracted answer itself.\n\n"
+                f"**Context:**\n{body}\n\n"
+                f"**User Question:**\n{question}\n\n"
+                "**Answer:**"
             )
 
             logger.info("llm_content: invoking LLM")
@@ -2040,18 +1829,19 @@ yes or no"""
 
             if result:
                 logger.info(f"llm_content: got answer, length={len(result)}")
-
-                if self._is_no_answer_text(result):
-                    logger.info("llm_content: LLM reported no grounded answer in context")
-                    return ""
-
+                
+                # Convert markdown tables to HTML if present
                 if '|' in result:
-                    is_table = any(
-                        re.match(r'^[\s|:-]+$', line.strip()) and '-' in line
-                        for line in result.splitlines()
-                        if line.strip()
-                    )
-
+                    lines = result.splitlines()
+                    # Check if this looks like a markdown table (has separator row in first 3 lines)
+                    is_table = False
+                    for i in range(min(3, len(lines))):
+                        line = lines[i].strip()
+                        # specific regex for separator line: only contains |, -, :, and spaces
+                        if line and re.match(r'^[\s|:-]+$', line) and '-' in line:
+                            is_table = True
+                            break
+                    
                     if is_table:
                         logger.info("llm_content: markdown table detected, converting to HTML")
                         try:
@@ -2061,15 +1851,15 @@ yes or no"""
                         except Exception as e:
                             logger.warning(f"llm_content: table conversion failed: {e}, returning original markdown")
                             return result
-
+                
                 return result
 
-            logger.warning("llm_content: LLM returned empty, treating as no grounded answer")
-            return ""
+            logger.warning("llm_content: LLM returned empty, falling back to body text")
+            return body
 
         except Exception as e:
             logger.error(f"llm_content error: {e}")
-            return ""
+            return (chunk_data.get('content') or chunk_data.get('page_content', '')).strip()
 
     def _synthesize_answer(self, question: str, chunks: List[Dict], language: str, is_content_header: bool = False) -> str:
         """Synthesize an answer from multiple chunks with citations."""
@@ -2112,18 +1902,23 @@ yes or no"""
 
             msg = self.llm.invoke([HumanMessage(content=prompt)])
             result = (msg.content or "").strip()
-
-            # Check for markdown table and convert to HTML if needed (matches production).
+            
+            # Check for markdown table and convert to HTML if needed (matching legacy behavior)
             if '|' in result:
-                is_table = any(
-                    re.match(r'^[\s|:-]+$', line.strip()) and '-' in line
-                    for line in result.splitlines()
-                    if line.strip()
-                )
-
+                lines = result.splitlines()
+                # Check if this looks like a markdown table (has separator row in first 3 lines)
+                is_table = False
+                for i in range(min(3, len(lines))):
+                    line = lines[i].strip()
+                    # specific regex for separator line: only contains |, -, :, and spaces
+                    if line and re.match(r'^[\s|:-]+$', line) and '-' in line:
+                        is_table = True
+                        break
+                
                 if is_table:
                     logger.info("_synthesize_answer: markdown table detected, converting to HTML")
                     try:
+                        # Attempt to use the helper method if available in this class context
                         if hasattr(self, '_convert_markdown_table_to_html'):
                             converted = self._convert_markdown_table_to_html(result)
                             logger.info(f"_synthesize_answer: table conversion successful, result length={len(converted)}")
@@ -2131,9 +1926,9 @@ yes or no"""
                     except Exception as e:
                         logger.warning(f"_synthesize_answer: table conversion failed: {e}, returning original markdown")
                         return result
-
+            
             return result
-
+            
         except Exception as e:
             logger.error(f"_synthesize_answer failed: {e}")
             # Fallback to first chunk content
@@ -2141,20 +1936,359 @@ yes or no"""
                 return chunks[0].get("text", "")
             return ""
 
-    def response(self, question, question_id=None, file_type=None, simplified_output: bool = False, session_id=None, doc_id: str = None):
+    def _verify_answer(self, question: str, chunks: List[Dict], answer: str, language: str) -> str:
+        """Verify the answer against context and citations."""
+        try:
+            from ..config import VERIFICATION_ENABLED, VERIFICATION_PROMPT
+            if not VERIFICATION_ENABLED:
+                return answer
+                
+            context_parts = []
+            for i, chunk in enumerate(chunks):
+                ref = chunk.get("reference", {})
+                section = chunk.get('header', 'Content')
+                header_line = f"[{section}]"
+                content = chunk.get("text", "")
+                context_parts.append(f"{header_line}\n{content}")
+                
+            context_str = "\n\n".join(context_parts)
+            
+            prompt = VERIFICATION_PROMPT.format(
+                question=question,
+                context=context_str,
+                answer=answer,
+                language=language
+            )
+            
+            logger.info("_verify_answer: invoking LLM")
+            msg = self.llm.invoke([HumanMessage(content=prompt)])
+            content = (msg.content or "").strip()
+            
+            # Clean up markdown code blocks if any
+            content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
+            content = re.sub(r"\s*```$", "", content)
+            
+            import json
+            # Extract JSON object
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                if result.get("valid"):
+                    logger.info("Verification passed")
+                    return result.get("corrected_answer") or answer
+                else:
+                    logger.warning(f"Verification failed: {result.get('reason')}")
+                    # If invalid, use corrected answer if available
+                    corrected = result.get("corrected_answer")
+                    if corrected and len(corrected) > 10:
+                        logger.info("Using corrected answer from verification")
+                        return corrected
+                    
+                    # If strictly failed and no correction, return failure message
+                    # Requirement: "Enforce strict document-only answering"
+                    return "I am sorry, but the answer to your question could not be verified against the provided documents."
+            else:
+                logger.warning("Verification response not valid JSON, skipping verification")
+                return answer
+                
+        except Exception as e:
+            logger.error(f"Verification error: {e}")
+            return answer
+
+    def _clean_and_rephrase_with_llm(self, text: str, language_name: str, question: str = None, answer_style: str = "exact", max_tokens: int = 512) -> str:
+        """
+        Use the LLM to extract exact answers from chunks or format content.
+        Falls back to _format_response_output on error or empty result.
+
+        Args:
+            text: The chunk content to process
+            language_name: Language for the response (English/Khmer)
+            question: The user's question (if provided)
+            answer_style: "exact" for concise answers, "detailed" for comprehensive answers
+            max_tokens: Maximum tokens for response
+        
+        Preserves HTML tables and converts Markdown pipe-tables to HTML before sending to the frontend.
+        """
+        if not text:
+            return text
+
+        # If the snippet already contains HTML table tags, preserve it as-is
+        try:
+            if self._is_html_table(text):
+                return text
+        except Exception:
+            pass
+
+        # If the snippet looks like a Markdown pipe table, convert it to HTML locally
+        try:
+            # crude detection: header line with '|' followed by separator line
+            lines = text.splitlines()
+            if len(lines) > 1 and '|' in lines[0] and re.match(r'^\s*\|?\s*[-:]+', lines[1].strip()):
+                converted = self._convert_markdown_table_to_html(text)
+                return converted
+        except Exception:
+            pass
+
+        # Enhanced prompt with question-answering capability
+        try:
+            if question:
+                # Choose prompt based on answer_style
+                if answer_style == "detailed":
+                    # DETAILED MODE - Comprehensive answer with context
+                    prompt = f"""You are an expert assistant that provides comprehensive, detailed answers from document chunks.
+
+TASK:
+Provide a thorough, detailed answer to the user's question using ALL relevant information from the document snippet.
+
+CRITICAL INSTRUCTIONS:
+1. **Read Carefully**: Understand both the question and the document snippet thoroughly
+2. **Be Comprehensive**: Include all relevant information, context, examples, and details
+3. **Stay Faithful**: Use ONLY information present in the snippet - do NOT add external knowledge
+4. **Provide Context**: Explain background information and relationships between concepts
+5. **Include Examples**: If the snippet contains examples, include them in your answer
+6. **Be Thorough**: Cover all aspects of the question found in the snippet
+7. **Maintain Flow**: Organize information in a logical, easy-to-follow structure
+8. **LANGUAGE ENFORCEMENT**: You MUST answer in {language_name}. If {language_name} is Khmer, the entire response MUST be in Khmer script. Do not use English unless the specific technical term is only known in English.
+
+FORMATTING RULES:
+- Use HTML bullet points (<ul><li>) for lists, steps, or multiple related items
+- Use <strong> tags to highlight key terms, numbers, or important facts
+- Use <p> tags to separate different aspects or sections of the answer
+- Preserve tables as HTML <table> format if they contain relevant information
+- Keep the same language as the question: {language_name}
+- Do NOT use markdown formatting (no **, ##, ```)
+- Do NOT wrap in code blocks
+- Do NOT add introductory phrases like "Based on the document..." or "According to the snippet..."
+
+ANSWER QUALITY:
+- Comprehensive and thorough
+- Well-organized with clear structure
+- Includes all relevant details, examples, and context
+- Factually accurate
+- Easy to understand
+
+---
+USER QUESTION:
+{question}
+
+DOCUMENT SNIPPET:
+{text}
+
+---
+Provide your detailed answer now (HTML formatted, {language_name} language):"""
+
+                else:
+                    # EXACT MODE - Concise, precise answer
+                    prompt = f"""You are an expert assistant that extracts precise, concise answers from document chunks.
+
+TASK:
+Extract the most essential information from the document snippet that directly answers the user's question.
+
+CRITICAL INSTRUCTIONS:
+1. **Read Carefully**: Understand both the question and the document snippet thoroughly
+2. **Extract Precisely**: Find information that answers or relates to the question
+3. **Stay Faithful**: Use ONLY information present in the snippet - do NOT add external knowledge
+4. **Be Specific**: Include relevant numbers, dates, names, and specific details
+5. **Be Concise**: Provide the shortest accurate answer - avoid unnecessary information
+6. **Be Helpful**: Extract ANY information from the snippet that helps answer the question
+7. **Direct Answer**: Get straight to the point without extra context
+8. **LANGUAGE ENFORCEMENT**: You MUST answer in {language_name}. If {language_name} is Khmer, the entire response MUST be in Khmer script. Do not use English unless the specific technical term is only known in English.
+
+IMPORTANT - NEVER respond with "No relevant information found in this section" or similar phrases. 
+If the snippet is COMPLETELY UNRELATED to the question, respond with EXACTLY: [NO_INFO]
+If there is ANY information in the snippet that relates to the question, extract and provide it.
+
+FORMATTING RULES:
+- Use HTML bullet points (<ul><li>) when listing multiple key items
+- Use <strong> tags to highlight the most critical facts or numbers
+- Keep it short and focused - prefer 2-4 sentences when possible
+- Preserve tables as HTML <table> format if they are the direct answer
+- Keep the same language as the question: {language_name}
+- Do NOT use markdown formatting (no **, ##, ```)
+- Do NOT wrap in code blocks
+- Do NOT add introductory phrases like "Based on the document..." or "According to the snippet..."
+
+ANSWER QUALITY:
+- Direct and to-the-point
+- Concise but complete
+- Factually accurate
+- Contains only essential details from the snippet
+
+---
+USER QUESTION:
+{question}
+
+DOCUMENT SNIPPET:
+{text}
+
+---
+Provide your concise answer now (HTML formatted, {language_name} language):"""
+
+            else:
+                # FORMATTING MODE - when no question provided (fallback)
+                prompt = f"""You are a helpful assistant that formats document snippets in a clear, user-friendly way while preserving all important information.
+
+FORMATTING GUIDELINES:
+- Use HTML bullet points (<ul><li>) for lists and key points
+- Use <strong> tags for important terms or headings
+- Break long paragraphs into shorter, digestible sections
+- Preserve all facts, numbers, dates, and specific details
+- If the snippet contains HTML tables, preserve them as-is
+- Keep the same language: {language_name}
+- **LANGUAGE ENFORCEMENT**: You MUST answer in {language_name}. If {language_name} is Khmer, the entire response MUST be in Khmer script.
+
+OUTPUT REQUIREMENTS:
+- Return ONLY the formatted HTML content directly
+- Do NOT wrap output in ```html ``` code blocks
+- Do NOT use markdown formatting
+- Make it easy to read and scan quickly
+- Use bullet points where appropriate for clarity
+- Do not add new information or omit details
+
+Snippet:
+{text}
+"""
+
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            cleaned = (response.content or "").strip()
+            
+            # Log token usage
+            try:
+                self.token_logger.log_token_usage(
+                    model=settings.OLLAMA_MODEL, 
+                    operation="answer_extraction" if question else "clean_rephrase", 
+                    usage_metadata=getattr(response, 'usage_metadata', None), 
+                    meta_json={
+                        "snippet_length": len(text),
+                        "has_question": bool(question),
+                        "question_length": len(question) if question else 0
+                    }
+                )
+            except Exception:
+                pass
+                
+            if cleaned:
+                # Strip markdown code blocks if LLM added them
+                if cleaned.startswith('```html'):
+                    cleaned = re.sub(r'^```html\s*\n', '', cleaned)
+                    cleaned = re.sub(r'\n```\s*$', '', cleaned)
+                elif cleaned.startswith('```'):
+                    cleaned = re.sub(r'^```\s*\n', '', cleaned)
+                    cleaned = re.sub(r'\n```\s*$', '', cleaned)
+                
+                # Convert any remaining markdown tables to HTML
+                if '|' in cleaned and '\n' in cleaned:
+                    lines = cleaned.splitlines()
+                    if len(lines) > 1 and re.search(r'^\s*\|?\s*[-:]+', lines[1].strip() if len(lines) > 1 else ''):
+                        cleaned = self._convert_markdown_table_to_html(cleaned)
+                
+                # Remove common LLM intro phrases that slip through
+                cleaned = re.sub(r'^(Based on the document|According to the snippet|The document states|Here is the answer)[,:]\s*', '', cleaned, flags=re.IGNORECASE)
+                
+                return cleaned
+                
+        except Exception as e:
+            logger.error(f"LLM answer extraction error: {e}")
+            
+        return self._format_response_output(text)
+
+    def _format_page_range(self, pages: List[int]) -> str:
+        """Format page numbers into readable ranges.
+
+        Examples:
+            [5] -> "p. 5"
+            [1, 2, 3] -> "pp. 1-3"
+            [1, 3, 5] -> "pp. 1, 3, 5"
+            [1, 2, 3, 7, 8, 9] -> "pp. 1-3, 7-9"
+        """
+        if not pages:
+            return "N/A"
+
+        if len(pages) == 1:
+            return f"p. {pages[0]}"
+
+        ranges = []
+        start = pages[0]
+        end = pages[0]
+
+        for i in range(1, len(pages)):
+            if pages[i] == end + 1:
+                end = pages[i]
+            else:
+                if start == end:
+                    ranges.append(str(start))
+                else:
+                    ranges.append(f"{start}-{end}")
+                start = end = pages[i]
+
+        # Add final range
+        if start == end:
+            ranges.append(str(start))
+        else:
+            ranges.append(f"{start}-{end}")
+
+        return f"pp. {', '.join(ranges)}"
+
+    def _is_no_info_response(self, text: str) -> bool:
+        """
+        Check if the LLM response indicates no relevant information was found.
+        
+        Args:
+            text: The formatted response from LLM
+            
+        Returns:
+            True if response indicates no relevant info, False otherwise
+        """
+        if not text or not text.strip():
+            return True
+        
+        # Normalize text for checking - remove HTML tags and convert to lowercase
+        import re
+        text_clean = re.sub(r'<[^>]+>', '', text)  # Strip HTML tags
+        text_lower = text_clean.lower().strip()
+        
+        # Common phrases indicating no relevant information (expanded list)
+        no_info_phrases = [
+            "no relevant information found",
+            "no relevant information in this section",
+            "no relevant information",
+            "no information found",
+            "not found in this section",
+            "does not contain",
+            "no answer found",
+            "cannot find",
+            "no relevant data",
+            "not available",
+            "no data found",
+            "information not found",
+            "unable to find",
+            "could not find",
+            "nothing found",
+            "[no_info]",  # New marker for no-info responses
+            "រកមិនឃើញព័ត៌មានពាក់ព័ន្ធទេ។",  # Khmer: "no relevant information found"
+            "រកមិនឃើញ",  # Khmer: "not found"
+        ]
+        
+        # Check if any no-info phrase is present
+        for phrase in no_info_phrases:
+            if phrase in text_lower:
+                return True
+        
+        # Check if response is too short (less than 20 characters) - likely not useful
+        if len(text_clean.strip()) < 20:
+            return True
+            
+        return False
+
+    def response(self, question, question_id=None, file_type=None, user_token=None, simplified_output: bool = False, session_id=None, answer_style: str = "exact", doc_id: str = None):
         if not question_id:
             question_id = str(uuid.uuid4())
         logger.info(f"Starting response generation for question_id: {question_id}")
 
-        original_question = question or ""
-        raw_question = strip_mention_prefix(original_question)
-
-        question = normalize_user_query(raw_question)
+        original_question = question
+        question = strip_mention_prefix(question)
         if original_question != question:
-            logger.info(
-                f"Sanitized mentioned question for retrieval: '{original_question[:120]}' -> '{question[:120]}'"
-            )
-        llm_question = (raw_question or question or "").strip()
+            logger.info(f"Sanitized mentioned question for retrieval: '{original_question[:120]}' -> '{question[:120]}'")
 
         # Track start time for performance evaluation
         start_time = time.time()
@@ -2177,7 +2311,7 @@ yes or no"""
             )
             return self._get_no_info_response(question_id, "English", simplified_output)
 
-        # Validate query language before retrieval
+        # Validate query is not gibberish - check if it can be detected as a valid language
         try:
             detected_lang = self.document_loader.detect_languages(question.strip())
             if detected_lang not in ['km', 'en', 'multi']:
@@ -2186,6 +2320,21 @@ yes or no"""
                     self.token_logger.start_query_session(query_id=question_id, question=question)
                 )
                 return self._get_no_info_response(question_id, "English", simplified_output)
+            
+            # Additional validation for Khmer: detect gibberish using zero-width character pattern
+            # Gibberish Khmer often has unusual zero-width character usage (U+200B, U+200C, etc.)
+            if detected_lang == 'km':
+                zero_width_count = sum(1 for c in question if ord(c) in [0x200B, 0x200C, 0x200D, 0xFEFF])
+                # Extract only Khmer characters for word-like analysis
+                khmer_only = ''.join(c for c in question if '\u1780' <= c <= '\u17FF')
+                
+                # If zero-width chars are excessive OR text is too short after cleaning
+                if zero_width_count > 2 or (len(khmer_only) < 3 and len(question) > 5):
+                    logger.warning(f"Khmer query detected as gibberish: {question}")
+                    self.token_logger.finish_query_session(
+                        self.token_logger.start_query_session(query_id=question_id, question=question)
+                    )
+                    return self._get_no_info_response(question_id, "Khmer", simplified_output)
         except Exception as e:
             logger.error(f"Error validating query language: {e}")
             # Continue processing on error
@@ -2197,13 +2346,6 @@ yes or no"""
 
         # Ensure cleanup happens even if an exception occurs
         try:
-            from ..config import (
-                FOLLOWUP_SUGGESTIONS_COUNT,
-                FOLLOWUP_SUGGESTIONS_ENABLED,
-                QUERY_VALIDATION_ENABLED,
-                RETRIEVAL_K,
-            )
-
             # Step 0: Get conversation context and reformulate query if needed
             logger.info(f"Step 0: Getting conversation context...")
             conversation_context = self._get_conversation_context(session_id, max_history=3)
@@ -2212,28 +2354,14 @@ yes or no"""
                 # Skip LLM reformulation - use original question for testing
                 logger.info("Skipping query reformulation - using original question")
             
-            # Step 1: Use the original normalized query directly
-            logger.info("Step 1: Query refinement removed - using original query")
-            retrieval_query = question
-
-            if QUERY_VALIDATION_ENABLED:
-                is_valid_query, validation_reason = self.verify_query(retrieval_query)
-                if not is_valid_query:
-                    logger.warning(
-                        f"Query validation rejected input. Query: {retrieval_query}, "
-                        f"reason: {validation_reason}"
-                    )
-                    self.token_logger.finish_query_session(query_session_id)
-                    try:
-                        detected_lang = self.document_loader.detect_languages(retrieval_query)
-                        response_lang = "Khmer" if detected_lang in ("km", "multi") else "English"
-                    except Exception:
-                        response_lang = "English"
-                    return self._get_no_info_response(question_id, response_lang, simplified_output)
-
-            # Validate that the retrieval query is still meaningful
+            # Step 1: Query Refinement
+            logger.info(f"Step 1: Refining query...")
+            refined_query = self.refine_query(question)
+            retrieval_query = refined_query
+            
+            # Validate that query refinement produced meaningful output
             if not retrieval_query or not retrieval_query.strip() or len(retrieval_query.strip()) < 2:
-                logger.warning(f"Query is empty/invalid after normalization. Original: {question}, Retrieval: {retrieval_query}")
+                logger.warning(f"Query refinement returned empty/invalid result. Original: {question}, Refined: {retrieval_query}")
                 self.token_logger.finish_query_session(
                     self.token_logger.start_query_session(query_id=question_id, question=question)
                 )
@@ -2245,7 +2373,7 @@ yes or no"""
                     response_lang = "English"
                 return self._get_no_info_response(question_id, response_lang, simplified_output)
 
-            k = max(5, RETRIEVAL_K)
+            k = 50  # Retrieve more chunks for scoring
 
             try:
                 detected_language = self.document_loader.detect_languages(retrieval_query)
@@ -2285,9 +2413,7 @@ yes or no"""
                 # Enable history reuse to restore PDF references on page refresh
                 check_history = self.reuse_history(retrieval_query, question_embedded, language_name, session_id)
                 if check_history:
-                    logger.info(
-                        f"History reused successfully with {len(check_history.get('document_references', []))} document references"
-                    )
+                    logger.info(f"? History reused successfully with {len(check_history.get('document_references', []))} document references")
                     # Return complete history with document_references preserved
                     return check_history
 
@@ -2333,10 +2459,10 @@ yes or no"""
                     return self._get_no_info_response(question_id, language_name, simplified_output)
 
                 # Apply language-dependent score threshold to Qdrant results.
-                # NOTE: Skip this filter when AgenticRAG is active it already
+                # NOTE: Skip this filter when AgenticRAG is active � it already
                 # applies its own confidence gate using RRF scores internally.
                 # The rerank (_rerank_score) values returned by AgenticRAG are
-                # cross-encoder scores (typically 0.05) and must NOT be
+                # cross-encoder scores (typically 0.001�0.05) and must NOT be
                 # compared against similarity-based thresholds (0.50-0.65).
                 if use_agentic_retrieval or doc_id:
                     reason = "confidence gate already applied internally" if use_agentic_retrieval else f"doc-scoped retrieval active for doc_id={doc_id}"
@@ -2346,10 +2472,11 @@ yes or no"""
                     filtered_related_docs = related_docs
                 else:
                     try:
+                        # Adjusted thresholds for better recall
                         if detected_language == 'km':
-                            score_threshold = 0.57
+                            score_threshold = 0.05
                         else:
-                            score_threshold = 0.57
+                            score_threshold = 0.05
                         logger.info(f"Applying score threshold: {score_threshold} for language {detected_language}")
 
                         # Filter documents whose max_score meets or exceeds the threshold
@@ -2422,10 +2549,12 @@ yes or no"""
                             # Use page_content for full content (fallback to content if not available)
                             chunk_content = chunk.get("page_content") or chunk.get("content", "")
                             
-                            logger.debug(
-                                f"chunk_idx={chunk_idx}, content length={len(chunk_content)}, "
-                                f"has page_content={'page_content' in chunk}"
-                            )
+                            logger.info(f"DEBUG: chunk_idx={chunk_idx}, content length={len(chunk_content)}, has page_content={'page_content' in chunk}")
+
+                            # Debug: Check if content has newlines
+                            if chunk_idx == 0 and '|' in chunk_content:
+                                logger.info(f"DEBUG: First chunk in doc {doc_id} has {chunk_content.count(chr(10))} newlines")
+                                logger.info(f"DEBUG: First chunk content preview (first 500 chars): {repr(chunk_content[:500])}")
 
                             # Skip empty chunks
                             if not chunk_content or len(chunk_content.strip()) < 20:
@@ -2434,11 +2563,6 @@ yes or no"""
 
                             # Each chunk gets its own reference - store as structured data
                             page_num = chunk.get("page", 1)
-                            page_start = int(chunk.get("page_start", page_num) or page_num)
-                            page_end = int(chunk.get("page_end", page_num) or page_num)
-                            if page_end < page_start:
-                                page_end = page_start
-                            pages_range = list(range(page_start, page_end + 1)) if page_end > page_start else [page_start]
                             chunk_count = len(chunks_for_doc)
                             max_score = related_docs[doc_id].get("max_score", 0.0)
                             
@@ -2449,7 +2573,6 @@ yes or no"""
                                 "content": chunk_content,
                                 "document": file_name,
                                 "page": page_num,
-                                "pages": pages_range,
                                 "score": f"{chunk_score:.2f}",
                                 "doc_id": doc_id
                             }
@@ -2460,47 +2583,28 @@ yes or no"""
                                 "text": chunk_content,  # Plain text for table
                                 "table_row": table_row_data,  # Table row data
                                 "header": chunk_header,  # Section header for LLM processing
-                                "html": chunk.get("html", ""),
-                                "inline_images": chunk.get("inline_images", []),
-                                "inline_image_urls": chunk.get("inline_image_urls", []),
-                                "inline_image_url": chunk.get("inline_image_url", ""),
-                                "inline_image_count": chunk.get("inline_image_count", 0),
-                                "page_image_url": chunk.get("page_image_url", ""),
-                                "image_directory_url": chunk.get("image_directory_url", ""),
-                                "image_manifest_url": chunk.get("image_manifest_url", ""),
                                 "header_level": chunk.get("header_level", 1),
                                 "chunk_index": chunk.get("chunk_index", 0),
+                                "content_type": chunk.get("content_type", "text"),
+                                "image_alt_text": chunk.get("image_alt_text", ""),
+                                "images": normalize_image_urls(chunk.get("images", [])),
                                 "reference": {
                                     "file_name": file_name,
                                     "doc_id": doc_id,
                                     "file_url": f"/v/{doc_id}",
                                     "page": page_num,
-                                    "pages": pages_range,
-                                    "page_start": page_start,
-                                    "page_end": page_end,
-                                    "page_confidence": chunk.get("page_confidence", ""),
-                                    "page_method": chunk.get("page_method", ""),
                                     "chunks_count": chunk_count,
                                     "max_score": f"{max_score:.2f}",
                                     "score": chunk_score,
                                     "has_table": chunk.get("has_table", False),
-                                    "html": chunk.get("html", ""),
-                                    "inline_images": chunk.get("inline_images", []),
-                                    "inline_image_urls": chunk.get("inline_image_urls", []),
-                                    "inline_image_url": chunk.get("inline_image_url", ""),
-                                    "inline_image_count": chunk.get("inline_image_count", 0),
-                                    "page_image_url": chunk.get("page_image_url", ""),
-                                    "image_directory_url": chunk.get("image_directory_url", ""),
-                                    "image_manifest_url": chunk.get("image_manifest_url", ""),
-                                    "image_directory_path": chunk.get("image_directory_path", ""),
-                                    "image_manifest_path": chunk.get("image_manifest_path", ""),
+                                    "images": normalize_image_urls(chunk.get("images", [])),
                                 },
                                 "score": chunk_score,
                                 "has_table": chunk.get("has_table", False)
                             }
                             
                             all_sections.append(chunk_data)
-                            logger.debug(f"Added chunk {chunk_idx} from doc_id: {doc_id}, page: {page_num}")
+                            logger.info(f"? Added chunk {chunk_idx} from doc_id: {doc_id}, page: {page_num}")
 
                     except Exception as e:
                         logger.error(f"Error processing document {doc_id}: {e}")
@@ -2537,13 +2641,6 @@ yes or no"""
                 extracted_section = ""
                 follow_up_chunks = []
                 answer_chunks = []
-                selected_chunk_text = ""
-                selected_chunk_header = ""
-                selected_reference = all_sections_top5[0].get("reference", {})
-                header_candidates = [
-                    (sec.get("header") or "").strip() for sec in all_sections_top5
-                ]
-                query_focus = self._determine_query_focus(llm_question, header_candidates)
 
                 if self.agentic_rag:
                     # Agentic synthesis: Use top chunks from ALL documents (multi-hop support)
@@ -2552,99 +2649,50 @@ yes or no"""
                     follow_up_chunks = all_sections_top5[1:]  # Use other top chunks for follow-ups
 
                     logger.info(f"[AgenticRAG] Synthesizing answer from {len(context_chunks)} chunks")
-
-                    # Check first chunk header to decide strategy (matches production).
+                    
+                    # Check first chunk header to decide strategy
                     top_chunk = context_chunks[0] if context_chunks else {}
                     top_header = (top_chunk.get("header") or "").strip()
-                    top_ref = top_chunk.get("reference") if isinstance(top_chunk, dict) else None
-                    if top_ref:
-                        selected_reference = top_ref
-                    top_text = (top_chunk.get("text") or "").strip() if isinstance(top_chunk, dict) else ""
-                    if not selected_chunk_text and top_text:
-                        selected_chunk_text = top_text
-                        selected_chunk_header = top_header
-
-                    if query_focus == "preamble":
-                        preamble_chunk = self._select_preamble_chunk(context_chunks, llm_question)
-                        answer_chunks = [preamble_chunk] if preamble_chunk else context_chunks[:1]
-                        follow_up_chunks = [c for c in context_chunks if c not in answer_chunks][:4]
-
-                        selected_chunk = answer_chunks[0] if answer_chunks else {}
-                        if selected_chunk.get("reference"):
-                            selected_reference = selected_chunk.get("reference", {})
-
-                        selected_header = (selected_chunk.get("header") or "").strip()
-                        selected_text = (selected_chunk.get("text") or "").strip()
-                        selected_body = self._strip_chunk_header_from_body(selected_text, selected_header)
-                        source_text = selected_body or selected_text
-
-                        if source_text:
-                            llm_processed_text = self.llm_content(
-                                chunk_data={
-                                    "content": source_text,
-                                    "page_content": selected_text,
-                                    "header": selected_header,
-                                },
-                                question=question,
-                                language_name=language_name,
-                            )
-                            if llm_processed_text and not self._is_no_answer_text(llm_processed_text):
-                                extracted_section = llm_processed_text.strip()
-                            else:
-                                extracted_section = source_text
-
-                            if not selected_chunk_text:
-                                selected_chunk_text = selected_text
-                                selected_chunk_header = selected_header
-                    elif top_header == "Content":
-                        # Filter to Content-only chunks and run the permissive synthesis prompt.
-                        content_chunks = [
-                            c for c in context_chunks
-                            if (c.get("header") or "").strip() == "Content"
-                        ]
-                        logger.info(
-                            f"[AgenticRAG] Filtered {len(context_chunks)} chunks to "
-                            f"{len(content_chunks)} 'Content' chunks"
-                        )
+                    
+                    # User request: "keep my old logic if user ask not realted with llm_content just header join with content"
+                    # Meaning: If header != "Content", just return verbatim text (header + content)
+                    if top_header == "Content":
+                        # Strictly filter chunks to only those with header "Content"
+                        content_chunks = [c for c in context_chunks if (c.get("header") or "").strip() == "Content"]
+                        logger.info(f"[AgenticRAG] Filtered {len(context_chunks)} chunks to {len(content_chunks)} 'Content' chunks")
                         if content_chunks:
                             answer_chunks = content_chunks[:1]
-
-                        raw_answer = self._synthesize_answer(
-                            question,
-                            content_chunks,
-                            language_name,
-                            is_content_header=True,
-                        )
-                        extracted_section = (raw_answer or "").strip()
+                        
+                        # 1. Synthesize (LLM extraction/generation) using filtered chunks
+                        # Use a specific prompt for Content/Table of Contents extraction to match legacy behavior
+                        # We pass a flag to _synthesize_answer to use the permissive prompt
+                        raw_answer = self._synthesize_answer(question, content_chunks, language_name, is_content_header=True)
+                        
+                        # 2. Verify
+                        # Skip verification for Content/TOC requests as they are structural/lists and often fail strict fact-checking
+                        # or just return the raw answer if verification is disabled/fails
+                        extracted_section = raw_answer
                     else:
-                        logger.info(
-                            f"[AgenticRAG] Header '{top_header}' != 'Content' — using verbatim formatting (old logic)"
-                        )
+                        # Use "old logic": join header with content verbatim
+                        logger.info(f"[AgenticRAG] Header '{top_header}' != 'Content' � using verbatim formatting (old logic)")
                         combined_parts = []
+                        # Use only the top 1 chunk to display, matching legacy "single chunk" behavior
                         for chunk in context_chunks[:1]:
-                            h = (chunk.get("header") or "").strip()
-                            raw_text = (chunk.get("text") or "").strip()
-                            body = self._strip_chunk_header_from_body(raw_text, h)
-                            if h and h != "Content":
-                                combined_parts.append(f"**{h}**\n\n{body.strip()}")
-                            else:
-                                combined_parts.append(body or raw_text)
-                        extracted_section = "\n\n---\n\n".join(
-                            p for p in combined_parts if p and p.strip()
-                        )
+                            rendered_chunk = format_answer_chunk(chunk)
+                            if rendered_chunk:
+                                combined_parts.append(rendered_chunk)
+                        
+                        extracted_section = "\n\n---\n\n".join(combined_parts)
                     
                 else:
                     # Legacy: Restrict to single top document
                     # Split: top 1 chunk for answer, remaining 4 for follow-up questions
-                    if query_focus == "preamble":
-                        preamble_chunk = self._select_preamble_chunk(all_top_chunks, llm_question)
-                        answer_chunks = [preamble_chunk] if preamble_chunk else all_top_chunks[:1]
-                    else:
-                        answer_chunks = all_top_chunks[:1]  # default: 1 chunk for answer
+                    answer_chunks = all_top_chunks[:1]  # default: 1 chunk for answer
 
                     # If user asks with a pasted header/title (short header-like query),
                     # and top chunk is header-only, include extra chunks from same doc.
-                    normalized_q = normalize_user_query(question).strip(" -:|")
+                    normalized_q = re.sub(r'^\s*\([^)]*\)\s*\|\s*', '', (question or '').strip())
+                    normalized_q = re.sub(r'\s+', ' ', normalized_q).strip(" -:|")
                     q_words = [w for w in re.split(r'\s+', normalized_q) if w]
                     header_like_query = False
                     if normalized_q and len(q_words) <= 7:
@@ -2681,48 +2729,44 @@ yes or no"""
 
                     follow_up_chunks = [c for c in all_top_chunks if c not in answer_chunks][:4]
 
-                    # Build answer from the top chunk (header-driven routing; matches production).
-                    chunks_for_render = answer_chunks
-
+                    # Build answer from the top chunk
                     combined_content_parts = []
-                    for chunk in chunks_for_render:
-                        if chunk.get("reference"):
-                            selected_reference = chunk.get("reference", {})
-
-                        chunk_text = (chunk.get("text") or "").strip()
+                    for chunk in answer_chunks:
+                        chunk_text = chunk.get("text", "")
                         chunk_header = (chunk.get("header") or "").strip()
-                        if not selected_chunk_text and chunk_text:
-                            selected_chunk_text = chunk_text
-                            selected_chunk_header = chunk_header
                         logger.info(f"response: processing chunk header='{chunk_header}'")
-                        chunk_body = self._strip_chunk_header_from_body(chunk_text, chunk_header)
 
-                        if (chunk_header == "Content" or query_focus == "preamble") and question:
-                            source_text = chunk_body or chunk_text
+                        if chunk_header == "Content" and question:
                             logger.info(f"response: invoking llm_content for question='{question[:100]}'")
                             llm_processed_text = self.llm_content(
                                 chunk_data={
-                                    "content": source_text,
+                                    "content": chunk_text,
                                     "page_content": chunk_text,
                                     "header": chunk_header
                                 },
                                 question=question,
                                 language_name=language_name
                             )
-                            if llm_processed_text and not self._is_no_answer_text(llm_processed_text):
-                                chunk_text = llm_processed_text.strip()
-                                logger.info(f"response: llm_content returned {len(chunk_text)} chars")
-                            else:
-                                logger.info("response: llm_content found no grounded answer; skipping chunk text fallback")
-                                chunk_text = ""
-
-                        if chunk_text:
-                            if chunk_header and chunk_header != "Content":
-                                combined_content_parts.append(
-                                    f"**{chunk_header}**\n\n{chunk_body}"
+                            if llm_processed_text:
+                                _no_answer_phrases = [
+                                    "not available", "i am sorry", "cannot find",
+                                    "not found", "not in the provided context", "does not contain",
+                                ]
+                                _is_no_answer = any(
+                                    p in llm_processed_text.lower() for p in _no_answer_phrases
                                 )
-                            else:
-                                combined_content_parts.append(chunk_text)
+                                if not _is_no_answer:
+                                    chunk_text = llm_processed_text
+                                    logger.info(f"response: llm_content returned {len(chunk_text)} chars")
+                                else:
+                                    logger.info(
+                                        "response: llm_content returned 'not available' - "
+                                        "keeping raw chunk text as fallback"
+                                    )
+
+                        rendered_chunk = format_answer_chunk(chunk, chunk_text)
+                        if rendered_chunk:
+                            combined_content_parts.append(rendered_chunk)
 
                     # Join content
                     extracted_section = "\n\n---\n\n".join(combined_content_parts)
@@ -2730,34 +2774,28 @@ yes or no"""
 
                 # Create answer with combined content
                 answers = []
-                ref = selected_reference or all_sections_top5[0]["reference"]
+                ref = all_sections_top5[0]["reference"]
                 doc_id = ref["doc_id"]
                 page = ref.get("page", 1)
-                answer_pages = ref.get("pages") if isinstance(ref.get("pages"), list) and ref.get("pages") else [page]
                 score = ref.get("score") or ref.get("max_score", 0.5)
+                answer_images = normalize_image_urls([
+                    image
+                    for chunk in answer_chunks
+                    for image in chunk.get("images", [])
+                ])
+                extracted_section = ensure_image_markdown(extracted_section, answer_images)
 
                 if extracted_section and extracted_section.strip():
-                    # Keep answer text as markdown/source structure so frontend markdown
-                    # renderer preserves bullets, new lines, and table layout like VS Code.
-                    display_section = self._dedupe_images_in_display_html(extracted_section)
-                    display_section_html = self._dedupe_images_in_display_html(
-                        self._to_display_html(display_section)
-                    )
-                    reference_source = self._strip_chunk_header_from_body(
-                        selected_chunk_text,
-                        selected_chunk_header,
-                    ) if selected_chunk_text else extracted_section
-                    reference_html = self._strip_images_from_reference_html(
-                        self._to_display_html(reference_source or selected_chunk_text or extracted_section)
-                    )
+                    table_html = f"<tr data-doc='{doc_id}' data-pages='{page}'><td>{ref['file_name']}</td><td>{page}</td><td>{extracted_section}</td></tr>"
                     answers.append({
                         "question_id": question_id,
-                        "text": display_section,
+                        "text": extracted_section,
                         "file_name": ref["file_name"],
                         "doc_id": doc_id,
                         "page": page,
-                        "pages": answer_pages,
+                        "pages": [page],
                         "score": score,
+                        "images": answer_images,
                         "id": 0,
                         "is_relevant": 0,
                         "document_reference": {
@@ -2765,13 +2803,13 @@ yes or no"""
                             "file_name": ref["file_name"],
                             "file_url": f"/v/{doc_id}",
                             "page": page,
-                            "pages": answer_pages,
+                            "pages": [page],
                             "max_score": score,
-                            "html": reference_html,
+                            "images": answer_images,
                         },
-                        "html": display_section_html
+                        "html_table_row": table_html
                     })
-                    logger.info(f"Created answer with extracted section ({len(extracted_section)} chars)")
+                    logger.info(f"? Created answer with extracted section ({len(extracted_section)} chars)")
                 else:
                     logger.warning("No relevant section extracted from top chunk")
                     self.token_logger.finish_query_session(query_session_id)
@@ -2782,20 +2820,9 @@ yes or no"""
                     doc_id: {
                         "doc_id": doc_id,
                         "file_name": ref["file_name"],
-                        "pages": set(answer_pages),
+                        "pages": {page},
                         "scores": [ref.get("score", 0.5)],
-                        "html": reference_html,
-                        "inline_images": ref.get("inline_images", []),
-                        "inline_image_urls": ref.get("inline_image_urls", []),
-                        "inline_image_url": ref.get("inline_image_url", ""),
-                        "inline_image_path": ref.get("inline_image_path", ""),
-                        "inline_image_count": ref.get("inline_image_count", 0),
-                        "page_image_url": ref.get("page_image_url", ""),
-                        "page_image_path": ref.get("page_image_path", ""),
-                        "image_directory_path": ref.get("image_directory_path", ""),
-                        "image_directory_url": ref.get("image_directory_url", ""),
-                        "image_manifest_path": ref.get("image_manifest_path", ""),
-                        "image_manifest_url": ref.get("image_manifest_url", ""),
+                        "images": set(answer_images),
                     }
                 }
 
@@ -2809,7 +2836,7 @@ yes or no"""
                            or s not in answer_chunks
                     ]
                     logger.info(
-                        f"follow_up_chunks empty; using {len(all_sections)} sections "
+                        f"follow_up_chunks empty � using {len(all_sections)} sections "
                         f"from all_sections_top5 as followup pool"
                     )
 
@@ -2828,53 +2855,36 @@ yes or no"""
                 
                 # Generate follow-up suggestions early (BEFORE exception handler path) to ensure they're always available
                 # This fixes the issue where suggestions would be missing when llm_content processing errors occur
-                suggestions_early = []
-                if FOLLOWUP_SUGGESTIONS_ENABLED and FOLLOWUP_SUGGESTIONS_COUNT > 0:
-                    logger.info(f"[DEBUG SUGGESTIONS] ENABLED={FOLLOWUP_SUGGESTIONS_ENABLED}, COUNT={FOLLOWUP_SUGGESTIONS_COUNT}")
-                    logger.info(f"[DEBUG SUGGESTIONS] all_sections length: {len(all_sections) if isinstance(all_sections, list) else 'NOT A LIST'}")
-                    logger.info(f"[DEBUG SUGGESTIONS] all_sections_top5 length: {len(all_sections_top5) if isinstance(all_sections_top5, list) else 'NOT A LIST'}")
-                    logger.info(f"Preparing follow-up suggestions pool from {len(all_sections)} sections")
-                    chunk_candidates_early = []
-                    try:
-                        top_chunks = all_sections if isinstance(all_sections, list) else []
-                        logger.info(f"[DEBUG SUGGESTIONS] top_chunks from all_sections: {len(top_chunks)}")
-                        if not top_chunks and isinstance(all_sections_top5, list):
-                            top_chunks = all_sections_top5
-                            logger.info(f"[DEBUG SUGGESTIONS] Fallback to all_sections_top5, using {len(top_chunks)} chunks")
-                        for chunk in top_chunks[:6]:  # Take up to 6 chunks for candidates
-                            try:
-                                ref = chunk.get('reference') if isinstance(chunk, dict) else None
-                                chunk_candidates_early.append({
-                                    'header': chunk.get('header', ''),
-                                    'file_name': ref.get('file_name') if ref else '',
-                                    'page': ref.get('page') if ref else None,
-                                    'pages': [ref.get('page')] if ref and ref.get('page') else [],
-                                    'text': chunk.get('text') if isinstance(chunk, dict) else str(chunk)
-                                })
-                            except Exception as e:
-                                logger.warning(f"Error processing chunk for early followup candidates: {e}")
-                    except Exception as e:
-                        logger.warning(f"Error building early chunk_candidates for followups: {e}")
-                        chunk_candidates_early = []
-
-                    if chunk_candidates_early:
-                        logger.info(f"[DEBUG SUGGESTIONS] chunk_candidates_early has {len(chunk_candidates_early)} items, calling LLM")
+                logger.info(f"Preparing follow-up suggestions pool from {len(all_sections)} sections")
+                chunk_candidates_early = []
+                try:
+                    top_chunks = all_sections if isinstance(all_sections, list) else []
+                    if not top_chunks and isinstance(all_sections_top5, list):
+                        top_chunks = all_sections_top5
+                    for chunk in top_chunks[:6]:  # Take up to 6 chunks for candidates
                         try:
-                            suggestions_early = self._generate_followup_questions(
-                                question,
-                                chunk_candidates_early[:4],
-                                FOLLOWUP_SUGGESTIONS_COUNT,
-                                detected_language,
-                            )
-                            logger.info(f"Early generated {len(suggestions_early)} follow-up suggestions")
-                            logger.info(f"[DEBUG EARLY] suggestions_early content: {suggestions_early}")
+                            ref = chunk.get('reference') if isinstance(chunk, dict) else None
+                            chunk_candidates_early.append({
+                                'header': chunk.get('header', ''),
+                                'file_name': ref.get('file_name') if ref else '',
+                                'page': ref.get('page') if ref else None,
+                                'pages': [ref.get('page')] if ref and ref.get('page') else [],
+                                'text': chunk.get('text') if isinstance(chunk, dict) else str(chunk)
+                            })
                         except Exception as e:
-                            logger.warning(f"Early follow-up generation failed: {e}, will retry later")
-                            suggestions_early = []
-                    else:
-                        logger.warning(f"[DEBUG SUGGESTIONS] chunk_candidates_early is EMPTY - no suggestions generated!")
-                else:
-                    logger.info("Follow-up suggestions disabled for fast mode")
+                            logger.warning(f"Error processing chunk for early followup candidates: {e}")
+                except Exception as e:
+                    logger.warning(f"Error building early chunk_candidates for followups: {e}")
+                    chunk_candidates_early = []
+                
+                suggestions_early = []
+                if chunk_candidates_early:
+                    try:
+                        suggestions_early = self._generate_followup_questions(question, chunk_candidates_early[:4], 4, detected_language)
+                        logger.info(f"? Early generated {len(suggestions_early)} follow-up suggestions")
+                    except Exception as e:
+                        logger.warning(f"Early follow-up generation failed: {e}, will retry later")
+                        suggestions_early = []
 
                 for doc_id in sorted_doc_ids:  # Use same sort order as chunks
                     if doc_id in unique_docs and doc_id in docs_with_answers:
@@ -2883,8 +2893,10 @@ yes or no"""
                         max_score = max(doc_info["scores"]) if doc_info["scores"] else 0.5
                         chunks_count = len([a for a in answers if a["doc_id"] == doc_id])
 
-                        if pages_list:
-                            page_display_str = f"page {', '.join(map(str, pages_list))}"
+                        if len(pages_list) == 1:
+                            page_display_str = f"p. {pages_list[0]}"
+                        elif pages_list:
+                            page_display_str = f"pp. {', '.join(map(str, pages_list))}"
                         else:
                             page_display_str = "N/A"
                         pdf_card_html = f'''<div class="flex flex-col p-4 rounded-xl border border-gray-200 bg-white hover:bg-primary/5 hover:border-primary/30 transition-all duration-200 cursor-pointer group/doc" onclick="window.location='/v/{doc_id}'">
@@ -2894,7 +2906,7 @@ yes or no"""
 </div>
 <div class="flex-1 min-w-0">
 <p class="text-sm font-semibold text-gray-900 truncate group-hover/doc:text-primary transition-colors">{doc_info["file_name"]}</p>
-<p class="text-xs text-gray-500 mt-1"><span class="font-semibold text-primary">{page_display_str} • </span>{chunks_count} chunks • Score: {max_score:.2f}</p>
+<p class="text-xs text-gray-500 mt-1"><span class="font-semibold text-primary">{page_display_str} � </span>{chunks_count} chunks � Score: {max_score:.2f}</p>
 </div>
 <div class="text-primary opacity-0 group-hover/doc:opacity-100 transition-opacity text-lg">?</div>
 </div>
@@ -2908,18 +2920,7 @@ yes or no"""
                             "max_score": max_score,
                             "pages": pages_list,
                             "page_display": page_display_str,
-                            "html": doc_info.get("html", ""),
-                            "inline_images": doc_info.get("inline_images", []),
-                            "inline_image_urls": doc_info.get("inline_image_urls", []),
-                            "inline_image_url": doc_info.get("inline_image_url", ""),
-                            "inline_image_path": doc_info.get("inline_image_path", ""),
-                            "inline_image_count": doc_info.get("inline_image_count", 0),
-                            "page_image_url": doc_info.get("page_image_url", ""),
-                            "page_image_path": doc_info.get("page_image_path", ""),
-                            "image_directory_path": doc_info.get("image_directory_path", ""),
-                            "image_directory_url": doc_info.get("image_directory_url", ""),
-                            "image_manifest_path": doc_info.get("image_manifest_path", ""),
-                            "image_manifest_url": doc_info.get("image_manifest_url", ""),
+                            "images": sorted(list(doc_info.get("images", set()))),
                             "html_card": pdf_card_html
                         })
 
@@ -2985,28 +2986,14 @@ yes or no"""
                                     'file_name': file_name or '',
                                     'file_url': ans.get('file_url') if isinstance(ans, dict) and ans.get('file_url') else (f"/v/{doc_id}" if doc_id else None),
                                     'page': page,
-                                    'max_score': score,
-                                    'html': ans.get('html', '') if isinstance(ans, dict) else '',
-                                    'inline_images': ans.get('inline_images', []) if isinstance(ans, dict) else [],
-                                    'inline_image_urls': ans.get('inline_image_urls', []) if isinstance(ans, dict) else [],
-                                    'inline_image_url': ans.get('inline_image_url', '') if isinstance(ans, dict) else '',
-                                    'inline_image_path': ans.get('inline_image_path', '') if isinstance(ans, dict) else '',
-                                    'inline_image_count': ans.get('inline_image_count', 0) if isinstance(ans, dict) else 0,
-                                    'page_image_url': ans.get('page_image_url', '') if isinstance(ans, dict) else '',
-                                    'page_image_path': ans.get('page_image_path', '') if isinstance(ans, dict) else '',
-                                    'image_directory_path': ans.get('image_directory_path', '') if isinstance(ans, dict) else '',
-                                    'image_directory_url': ans.get('image_directory_url', '') if isinstance(ans, dict) else '',
-                                    'image_manifest_path': ans.get('image_manifest_path', '') if isinstance(ans, dict) else '',
-                                    'image_manifest_url': ans.get('image_manifest_url', '') if isinstance(ans, dict) else '',
+                                    'max_score': score
                                 })
 
                     # Prepare history and response selection (limit answers & generate followups)
                     try:
-                        # Logic: Always show 1 answer (top chunk), optionally generate follow-up questions
+                        # Logic: Always show 1 answer (top chunk), generate 4 follow-up questions from remaining chunks
                         top_n = 1  # Always show 1 answer
-                        suggestions_count = (
-                            FOLLOWUP_SUGGESTIONS_COUNT if FOLLOWUP_SUGGESTIONS_ENABLED else 0
-                        )
+                        suggestions_count = 4  # Always generate 4 follow-up questions
 
                         selected_answers = answers[:top_n]
                         selected_per_answer_references = per_answer_references[:top_n] if per_answer_references else []
@@ -3016,89 +3003,63 @@ yes or no"""
                         selected_clean_document_references = [ref for ref in clean_document_references if ref.get('doc_id') in sel_doc_ids] if clean_document_references else []
 
                         # Build chunk-level follow-up candidates from the top relevant chunks (prefer chunks NOT in selected answers)
-                        suggestions = []
-                        if suggestions_count > 0:
-                            logger.info(f"[DEBUG MAIN] Building chunk candidates for main path, suggestions_count={suggestions_count}")
-                            chunk_candidates = []
-                            try:
-                                top_chunks = all_sections if isinstance(all_sections, list) else []
-                                logger.info(f"[DEBUG MAIN] top_chunks from all_sections: {len(top_chunks)}")
-                                # If still empty, pull from the full all_sections_top5 pool
-                                if not top_chunks and isinstance(all_sections_top5, list):
-                                    top_chunks = all_sections_top5
-                                    logger.info(f"[DEBUG MAIN] Fallback to all_sections_top5: {len(top_chunks)} chunks")
-                                logger.info(f"[DEBUG MAIN] Processing {len(top_chunks)} chunks, prefer outside sel_doc_ids={sel_doc_ids}")
+                        chunk_candidates = []
+                        try:
+                            top_chunks = all_sections if isinstance(all_sections, list) else []
+                            # If still empty, pull from the full all_sections_top5 pool
+                            if not top_chunks and isinstance(all_sections_top5, list):
+                                top_chunks = all_sections_top5
+                            for chunk in top_chunks:
+                                try:
+                                    ref = chunk.get('reference') if isinstance(chunk, dict) else None
+                                    doc_id = ref.get('doc_id') if ref else None
+                                    # prefer chunks from other docs first
+                                    if doc_id and doc_id in sel_doc_ids:
+                                        continue
+                                    chunk_candidates.append({
+                                        'header': chunk.get('header', ''),
+                                        'file_name': ref.get('file_name') if ref else '',
+                                        'page': ref.get('page') if ref else None,
+                                        'pages': [ref.get('page')] if ref and ref.get('page') else [],
+                                        'text': chunk.get('text') if isinstance(chunk, dict) else str(chunk)
+                                    })
+                                except Exception as e:
+                                    logger.warning(f"Error processing chunk for followup candidates: {e}")
+                            # If not enough candidates, include chunks from selected docs to fill
+                            if len(chunk_candidates) < suggestions_count:
                                 for chunk in top_chunks:
                                     try:
                                         ref = chunk.get('reference') if isinstance(chunk, dict) else None
-                                        doc_id = ref.get('doc_id') if ref else None
-                                        # prefer chunks from other docs first
-                                        if doc_id and doc_id in sel_doc_ids:
-                                            continue
-                                        chunk_candidates.append({
+                                        candidate = {
                                             'header': chunk.get('header', ''),
                                             'file_name': ref.get('file_name') if ref else '',
                                             'page': ref.get('page') if ref else None,
                                             'pages': [ref.get('page')] if ref and ref.get('page') else [],
                                             'text': chunk.get('text') if isinstance(chunk, dict) else str(chunk)
-                                        })
-                                    except Exception as e:
-                                        logger.warning(f"Error processing chunk for followup candidates: {e}")
-                                # If not enough candidates, include chunks from selected docs to fill
-                                if len(chunk_candidates) < suggestions_count:
-                                    for chunk in top_chunks:
-                                        try:
-                                            ref = chunk.get('reference') if isinstance(chunk, dict) else None
-                                            candidate = {
-                                                'header': chunk.get('header', ''),
-                                                'file_name': ref.get('file_name') if ref else '',
-                                                'page': ref.get('page') if ref else None,
-                                                'pages': [ref.get('page')] if ref and ref.get('page') else [],
-                                                'text': chunk.get('text') if isinstance(chunk, dict) else str(chunk)
-                                            }
-                                            if candidate not in chunk_candidates:
-                                                chunk_candidates.append(candidate)
-                                        except Exception:
-                                            pass
-                                        if len(chunk_candidates) >= suggestions_count:
-                                            break
-                            except Exception as e:
-                                logger.warning(f"Error building chunk_candidates for followups: {e}")
-                                chunk_candidates = []
-                            
-                            logger.info(f"[DEBUG MAIN] Final chunk_candidates: {len(chunk_candidates)} items")
-                            if not chunk_candidates:
-                                logger.warning(f"[DEBUG MAIN] chunk_candidates is EMPTY - no main path suggestions!")
+                                        }
+                                        if candidate not in chunk_candidates:
+                                            chunk_candidates.append(candidate)
+                                    except Exception:
+                                        pass
+                                    if len(chunk_candidates) >= suggestions_count:
+                                        break
+                        except Exception as e:
+                            logger.warning(f"Error building chunk_candidates for followups: {e}")
+                            chunk_candidates = []
 
-                            # Generate follow-up suggestions using LLM
-                            try:
-                                suggestions = self._generate_followup_questions(
-                                    question,
-                                    chunk_candidates[:4],
-                                    suggestions_count,
-                                    detected_language,
-                                )
-                                logger.info(f"Generated {len(suggestions)} follow-up suggestions (main path)")
-                                logger.info(f"[DEBUG MAIN] suggestions content: {suggestions}")
-                            except Exception as e:
-                                logger.info(f"Follow-up generation failed (main path): {e}")
-                                # Fallback to early-generated suggestions if available
-                                if suggestions_early:
-                                    suggestions = suggestions_early
-                                    logger.info(
-                                        f"Using early-generated suggestions ({len(suggestions_early)} items) as fallback"
-                                    )
-                                else:
-                                    suggestions = []
-                                logger.info(f"[DEBUG MAIN FALLBACK] suggestions after fallback: {suggestions}")
-
-                            # If main generation returned empty, try early-generated suggestions
-                            if not suggestions and suggestions_early:
+                        # Generate follow-up suggestions using LLM
+                        suggestions = []
+                        try:
+                            suggestions = self._generate_followup_questions(question, chunk_candidates[:4], suggestions_count, detected_language)
+                            logger.info(f"? Generated {len(suggestions)} follow-up suggestions (main path)")
+                        except Exception as e:
+                            logger.info(f"Follow-up generation failed (main path): {e}")
+                            # Fallback to early-generated suggestions if available
+                            if suggestions_early:
                                 suggestions = suggestions_early
-                                logger.info(
-                                    f"Using early-generated suggestions ({len(suggestions_early)} items) "
-                                    f"as main path returned empty"
-                                )
+                                logger.info(f"? Using early-generated suggestions ({len(suggestions_early)} items) as fallback")
+                            else:
+                                suggestions = []
 
                         # Build history payload using selected answers and suggestions
                         history_data = {
@@ -3124,22 +3085,17 @@ yes or no"""
                         for i, ans in enumerate(selected_answers, start=1):
                             ans_text = ans.get("text", "") if isinstance(ans, dict) else str(ans)
                             if ans_text:
-                                # Only normalize legacy markdown noise for non-HTML answers.
-                                if not self._looks_like_html(ans_text):
-                                    ans_text = cleanup_bold_colon(ans_text)
+                                # Clean up bold colon patterns from table cells
+                                ans_text = cleanup_bold_colon(ans_text)
                                 combined_answer_parts.append(ans_text)
                                 # Debug: Check newlines in answer text
-                                logger.debug(
-                                    f"Answer {i} has {ans_text.count(chr(10))} newlines, length={len(ans_text)}"
-                                )
+                                logger.info(f"DEBUG: Answer {i} has {ans_text.count(chr(10))} newlines, length={len(ans_text)}")
                                 if '|' in ans_text:
-                                    logger.debug(
-                                        f"Answer {i} contains table pipes. First 300 chars: {repr(ans_text[:300])}"
-                                    )
+                                    logger.info(f"DEBUG: Answer {i} contains table pipes. First 300 chars: {repr(ans_text[:300])}")
                         combined_answer = "\n\n---\n\n".join(combined_answer_parts) if combined_answer_parts else ""
                         
                         # Debug: Check final combined_answer
-                        logger.debug(f"combined_answer has {combined_answer.count(chr(10))} newlines total")
+                        logger.info(f"DEBUG: combined_answer has {combined_answer.count(chr(10))} newlines total")
 
                         # Prepare final response payload
                         if simplified_output:
@@ -3150,7 +3106,6 @@ yes or no"""
                                 "suggestions": suggestions
                             }
 
-                        logger.info(f"[DEBUG RETURN] Returning response with {len(suggestions) if isinstance(suggestions, list) else 0} suggestions")
                         return {
                             "answers": selected_answers,
                             "combined_answer": combined_answer,
@@ -3160,19 +3115,12 @@ yes or no"""
                         }
                     except Exception as e:
                         logger.error(f"Error preparing response selection: {e}")
-                        logger.info(f"[DEBUG] suggestions at error: {suggestions if 'suggestions' in locals() else 'NOT DEFINED'}")
                         # Fallback to original full payload in case of error
                         try:
-                            fallback_suggestions = (
-                                suggestions
-                                if 'suggestions' in locals() and isinstance(suggestions, list)
-                                else (suggestions_early if suggestions_early else [])
-                            )
                             history_data = {
                                 "answers": answers,
                                 "document_references": per_answer_references,
-                                "document_references_aggregated": clean_document_references,
-                                "suggestions": fallback_suggestions,
+                                "document_references_aggregated": clean_document_references
                             }
                             if session_id:
                                 history_data["session_id"] = str(session_id)
@@ -3185,8 +3133,8 @@ yes or no"""
                         for i, ans in enumerate(answers, start=1):
                             ans_text = ans.get("text", "") if isinstance(ans, dict) else str(ans)
                             if ans_text:
-                                if not self._looks_like_html(ans_text):
-                                    ans_text = cleanup_bold_colon(ans_text)
+                                # Clean up bold colon patterns from table cells
+                                ans_text = cleanup_bold_colon(ans_text)
                                 fallback_combined_parts.append(ans_text)
                         fallback_combined = "\n\n---\n\n".join(fallback_combined_parts) if fallback_combined_parts else ""
                         # Return the original full response as last resort
@@ -3212,6 +3160,11 @@ yes or no"""
             logger.error(f"Error in response method: {e}")
             self.token_logger.finish_query_session(query_session_id)
             return self._get_no_info_response(question_id, language_name, simplified_output)
+
+    def get_or_create_inactive_history(self):
+        """ Get or create inactive history collection name"""
+        return self.inactive_history_collection_name
+
 
     def delete_history(self, file_id:str, session_id: str = None):
         """Permanentlly delete history question related to a specific file"""

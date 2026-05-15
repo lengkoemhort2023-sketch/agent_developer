@@ -7,6 +7,7 @@ from qdrant_client.http.models import Distance, VectorParams, SparseVectorParams
 import os
 import torch
 import numpy as np
+import threading
 from typing import List, Dict, Tuple, Optional
 from django.conf import settings
 import logging
@@ -250,6 +251,16 @@ class BGEM3EmbeddingFunction(Embeddings):
 
 class VectorStoreService:
     """Vector Store service using Qdrant"""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
 
     def __init__(self):
         if not hasattr(self, '_initialized'):

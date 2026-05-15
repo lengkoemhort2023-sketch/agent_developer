@@ -45,7 +45,7 @@ services:
         ports:
             - 5434:5432
         volumes:
-            - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data/
+            - postgres_data:/var/lib/postgresql/data/
         environment:
             - POSTGRES_USER=postgres
             - POSTGRES_PASSWORD=postgres
@@ -56,7 +56,7 @@ services:
     qdrant:
         image: qdrant/qdrant:latest
         volumes:
-            - ${DATA_DIR:-./data}/qdrant:/qdrant/storage
+            - qdrant_data:/qdrant/storage
         ports:
             - 6334:6333
         environment:
@@ -71,7 +71,7 @@ services:
         ports:
             - 6381:6379
         volumes:
-            - ${DATA_DIR:-./data}/redis:/data
+            - redis_data:/data
         networks:
             - net
 
@@ -122,6 +122,9 @@ services:
         restart: unless-stopped
 
 volumes:
+    postgres_data:
+    redis_data:
+    qdrant_data:
     mediafiles:
     staticfiles:
 
