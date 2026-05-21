@@ -113,14 +113,20 @@ class BGEM3EmbeddingFunction(Embeddings):
 
             logger.info(f"Initializing BGEM3FlagModel from path: {model_path}")
             cuda_available = torch.cuda.is_available()
-            if cuda_available:
-                logger.info("[VectorStore] GPU detected — loading BGE-M3 with FP16 on CUDA.")
-                self.model = BGEM3FlagModel(model_path, use_fp16=True)
-            else:
-                logger.info("[VectorStore] No GPU detected — loading BGE-M3 with FP32 on CPU.")
-                self.model = BGEM3FlagModel(model_path, use_fp16=False)
+            self.model = None
 
-            logger.info(f"BGEM3 model loaded successfully from path: {model_path} (cuda={cuda_available})")
+            if cuda_available:
+                try:
+                    logger.info("[VectorStore] GPU detected — loading BGE-M3 with FP16 on CUDA.")
+                    self.model = BGEM3FlagModel(model_path, use_fp16=True)
+                    logger.info(f"BGEM3 model loaded successfully from path: {model_path} (cuda=True, fp16=True)")
+                except Exception as gpu_exc:
+                    logger.warning(f"[VectorStore] GPU load failed ({gpu_exc}), retrying on CPU (FP32)...")
+
+            if self.model is None:
+                logger.info("[VectorStore] Loading BGE-M3 with FP32 on CPU.")
+                self.model = BGEM3FlagModel(model_path, use_fp16=False)
+                logger.info(f"BGEM3 model loaded successfully from path: {model_path} (cuda=False, fp16=False)")
 
         except Exception as e:
             logger.error(f"Error initializing embedding model: {str(e)}")
@@ -738,7 +744,7 @@ class VectorStoreService:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
-    def query_collection_hybrid(self, collection_name: str, query: str, k: int, query_language: str = None, source_filter: str = None):
+    def query_collection_hybrid(self, collection_name: str, query: str, k: int, query_language: str = None, source_filter: str = None, precomputed_vectors: tuple = None):
         """Run a hybrid prefetch+fusion query against a single collection using BGEM3.
 
         Filters are pushed down to the Qdrant query level (not post-processed in Python)
@@ -749,6 +755,7 @@ class VectorStoreService:
                            payload field equals this value (the document UUID /
                            file_id).  This is the correct way to honour document
                            mentions so that all ``k`` slots come from that document.
+            precomputed_vectors: Optional (dense, sparse) tuple to avoid re-embedding.
 
         Returns a list of hit objects (client-specific shapes) which include .payload and .score.
         """
@@ -780,8 +787,11 @@ class VectorStoreService:
                 )
             qdrant_filter = models.Filter(must=must_conditions)
 
-            # Get dense + sparse query vectors
-            query_dense, query_sparse = self.embedding.embed_query_hybrid(query)
+            # Get dense + sparse query vectors (reuse precomputed if available)
+            if precomputed_vectors:
+                query_dense, query_sparse = precomputed_vectors
+            else:
+                query_dense, query_sparse = self.embedding.embed_query_hybrid(query)
 
             prefetchs = []
             # Dense prefetch with filter applied at candidate level

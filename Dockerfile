@@ -1,4 +1,8 @@
-FROM nvidia/cuda:13.1.0-devel-ubuntu22.04
+# FROM nvidia/cuda:13.1.0-devel-ubuntu22.04
+FROM ubuntu:22.04
+#   For production, swap them:
+#   1. Uncomment the nvidia/cuda line
+#   2. Comment/remove FROM ubuntu:22.04
 
 # Install Python and pip
 RUN apt-get update && apt-get install -y \

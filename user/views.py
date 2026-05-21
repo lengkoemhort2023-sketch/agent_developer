@@ -204,5 +204,3 @@ class UpdateAvatarView(APIView):
 
 
 
-
-

@@ -98,30 +98,39 @@ class RAGTools:
                 if _GLOBAL_RERANKER is not None:
                     return _GLOBAL_RERANKER
                 
-                try:
-                    cuda_available = torch.cuda.is_available()
-                    use_fp16 = cuda_available  # FP16 on GPU, FP32 on CPU
-                    device_label = "CUDA (FP16)" if cuda_available else "CPU (FP32)"
-                    logger.info(f"[Tools] Loading bge-reranker-v2-m3 on {device_label} (Singleton Init).")
-                    
-                    with warnings.catch_warnings():
-                        warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
-                        warnings.filterwarnings("ignore", message=".*fix_mistral_regex.*")
-                        warnings.filterwarnings("ignore", message=".*tokenizer you are loading.*")
-                        reranker = _FlagReranker(RERANKER_MODEL_PATH, use_fp16=use_fp16)
-                    
-                    _GLOBAL_RERANKER = reranker
-                    logger.info(
-                        f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} "
-                        f"(fp16={use_fp16}, cuda={cuda_available})"
-                    )
-                    return _GLOBAL_RERANKER
-                except Exception as exc:
-                    logger.warning(
-                        f"[Tools] Could not load bge-reranker-v2-m3 ({exc}). "
-                        "Falling back to heuristic reranking."
-                    )
-                    return None
+                cuda_available = torch.cuda.is_available()
+                reranker = None
+
+                if cuda_available:
+                    try:
+                        logger.info("[Tools] Loading bge-reranker-v2-m3 on CUDA (FP16) (Singleton Init).")
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
+                            warnings.filterwarnings("ignore", message=".*fix_mistral_regex.*")
+                            warnings.filterwarnings("ignore", message=".*tokenizer you are loading.*")
+                            reranker = _FlagReranker(RERANKER_MODEL_PATH, use_fp16=True)
+                        logger.info(f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} (fp16=True, cuda=True)")
+                    except Exception as gpu_exc:
+                        logger.warning(f"[Tools] GPU load failed ({gpu_exc}), retrying on CPU (FP32)...")
+
+                if reranker is None:
+                    try:
+                        logger.info("[Tools] Loading bge-reranker-v2-m3 on CPU (FP32).")
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
+                            warnings.filterwarnings("ignore", message=".*fix_mistral_regex.*")
+                            warnings.filterwarnings("ignore", message=".*tokenizer you are loading.*")
+                            reranker = _FlagReranker(RERANKER_MODEL_PATH, use_fp16=False)
+                        logger.info(f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} (fp16=False, cuda=False)")
+                    except Exception as cpu_exc:
+                        logger.warning(
+                            f"[Tools] Could not load bge-reranker-v2-m3 on CPU ({cpu_exc}). "
+                            "Falling back to heuristic reranking."
+                        )
+                        return None
+
+                _GLOBAL_RERANKER = reranker
+                return _GLOBAL_RERANKER
         return None
 
     # ── Tool 1: hybrid_search ────────────────────────────────────────────────

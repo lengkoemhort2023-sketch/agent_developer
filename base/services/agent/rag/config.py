@@ -85,7 +85,7 @@ QUEUE_DEFAULT_PRIORITY = env_int("AGENTIC_QUEUE_DEFAULT_PRIORITY", 5)
 
 
 # Model Configuration
-LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "gemma3:27b")
+LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "gemma4:26b")
 
 # Prompts
 

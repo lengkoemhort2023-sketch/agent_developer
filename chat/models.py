@@ -71,7 +71,7 @@ class MessageFeedback(models.Model):
         null=True, blank=True, related_name='feedbacks'
     )
     # Store message_id as string fallback in case the ChatMessage is deleted
-    message_id_str = models.CharField(max_length=36, null=True, blank=True, db_index=True)
+    message_id_str = models.CharField(max_length=255, null=True, blank=True, db_index=True)
     user = models.ForeignKey(
         User, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='feedbacks'

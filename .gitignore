@@ -3,117 +3,99 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# Virtual Environments
+# Virtual environments
 venv/
 env/
-ENV/
-env.bak/
-venv.bak/
-.venv
+.venv/
 
-# Django
+# Django runtime artifacts
 *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-/staticfiles/
-/mediafiles/
-/logdata/
+staticfiles/
+mediafiles/
+logdata/
+logs/
 
-# Environment & Secrets
+# Environment & secrets
 .env
 .env.local
 .env.*.local
 .env.dev
+certs/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
 
-# IDE & Editors
+# IDE & editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
-.project
-.pydevproject
-.settings/
-*.sublime-project
-*.sublime-workspace
 
-# OS
+# OS files
 Thumbs.db
 .DS_Store
-*.log
 
-# Temporary Files
+# Temporary files
 *.tmp
 *.temp
 *.bak
 *.backup
 *.orig
-*.rej
 
-# Build & CI/CD
-.jenkins/
-jenkins_home/
-*.jar
-.gradle/
-node_modules/
-npm-debug.log
-
-# Docker
-.dockerignore
-
-# IDE Generated Files
-.mypy_cache/
-.dmypy.json
-dmypy.json
-.pyre/
-
-# Pycharm
-.idea/
-*.iml
-
-# Rope
-.ropeproject/
-
-# Output Files
+# Output files
 output.md
 *.output
 results/
 
-# Large Model Files (5GB+)
+# ML model artifacts
 app/models/
+models/
 *.bin
 *.pt
 *.pth
 *.ckpt
 *.safetensors
-*.model
+*.gguf
+*.onnx
 
-# Jenkins
-workspace/
-target/
-*.war
+# Docker
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat.pid
+
+# Docker data volumes
+postgres_data/
+pgdata/
+redis_data/
+qdrant_storage/
+qdrant_data/
+.qdrant/
+
+# Database dumps & backups
+*.sql
+*.dump
+backups/
+
+# Process IDs
+*.pid
+
+# Media uploads
+app/media/
+app/mediafiles/

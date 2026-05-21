@@ -180,30 +180,31 @@ os.environ['MKL_NUM_THREADS'] = '2'
 os.environ['OPENBLAS_NUM_THREADS'] = '2'
 
 class MemoryManager:
-    """Monitor and manage system memory for production"""
-    # Lower thresholds for production - be more proactive
-    MEMORY_THRESHOLD = 50  # percentage - start cleanup at 50%
-    CRITICAL_THRESHOLD = 75  # percentage - critical level at 75%
-    
-    # Singleton instance to track cleanup state
+    """Monitor and manage system memory for production under concurrent load"""
+
+    # Raised thresholds for 200+ concurrent users — avoid over-aggressive cleanup
+    MEMORY_THRESHOLD = 87       # percentage – start cleanup at 87%
+    CRITICAL_THRESHOLD = 93     # percentage – critical level at 93%
+    GPU_CLEANUP_THRESHOLD_GB = 24  # GB – only run GPU cleanup above this (tuned for RTX 5090 32GB)
+
+    # Singleton + concurrency guards
     _instance = None
     _last_cleanup_time = 0
-    _cleanup_cooldown = 10  # seconds between cleanups
+    _cleanup_cooldown = 30       # seconds between cleanups (raised for concurrent load)
+    _gpu_cleanup_lock = threading.Lock()
+    _gpu_cleanup_in_progress = False
 
     @staticmethod
     def check_memory():
-        """Check current memory usage"""
         ram = psutil.virtual_memory()
         return ram.percent
 
     @staticmethod
     def check_gpu_memory():
-        """Check GPU memory usage if available"""
         try:
-            import torch
             if torch.cuda.is_available():
-                gpu_memory = torch.cuda.memory_allocated() / (1024 ** 3)  # GB
-                gpu_memory_cached = torch.cuda.memory_reserved() / (1024 ** 3)  # GB
+                gpu_memory = torch.cuda.memory_allocated() / (1024 ** 3)
+                gpu_memory_cached = torch.cuda.memory_reserved() / (1024 ** 3)
                 return gpu_memory, gpu_memory_cached
             return 0, 0
         except Exception:
@@ -211,25 +212,13 @@ class MemoryManager:
 
     @staticmethod
     def force_cleanup():
-        """Force comprehensive garbage collection and memory cleanup"""
         try:
-            # Force Python garbage collection
             gc.collect()
-            
-            # Clear Python object cache
             import sys
             if hasattr(sys, '_clear_type_cache'):
                 sys._clear_type_cache()
-            
-            # Clear module caches
             import importlib
             importlib.invalidate_caches()
-            
-            # Clear string interning cache
-            import sys
-            if hasattr(sys, 'intern'):
-                sys.intern('')
-            
             return True
         except Exception as e:
             logging.warning(f"Memory cleanup warning: {e}")
@@ -237,58 +226,47 @@ class MemoryManager:
 
     @staticmethod
     def force_gpu_cleanup():
-        """Force GPU memory cleanup"""
+        if not torch.cuda.is_available():
+            return False
+
+        if not MemoryManager._gpu_cleanup_lock.acquire(blocking=False):
+            logging.debug("GPU cleanup skipped – another thread is already cleaning")
+            return False
+
         try:
-            import torch
-            if torch.cuda.is_available():
-                # Empty CUDA cache
-                torch.cuda.empty_cache()
-                
-                # Clear CUDA memory reserved
-                if hasattr(torch.cuda, 'reset_peak_memory_stats'):
-                    torch.cuda.reset_peak_memory_stats()
-                
-                # Clear any cached models
-                torch.cuda.synchronize()
-                
-                return True
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                torch.cuda.reset_peak_memory_stats()
+            return True
         except Exception as e:
             logging.warning(f"GPU cleanup warning: {e}")
             return False
+        finally:
+            MemoryManager._gpu_cleanup_lock.release()
 
     @staticmethod
     def should_cleanup(force: bool = False):
-        """Check if memory cleanup is needed with cooldown protection"""
         import time
-        
-        # Allow forced cleanup regardless of cooldown
         if force:
             return MemoryManager.check_memory() > MemoryManager.MEMORY_THRESHOLD
-        
-        # Check cooldown
         time_since_last = time.time() - MemoryManager._last_cleanup_time
         if time_since_last < MemoryManager._cleanup_cooldown:
             return False
-        
         return MemoryManager.check_memory() > MemoryManager.MEMORY_THRESHOLD
 
     @staticmethod
     def should_critical_cleanup():
-        """Check if critical memory cleanup is needed"""
         return MemoryManager.check_memory() > MemoryManager.CRITICAL_THRESHOLD
-    
+
     @staticmethod
     def record_cleanup():
-        """Record that cleanup was performed"""
         import time
         MemoryManager._last_cleanup_time = time.time()
 
     @staticmethod
     def get_memory_status():
-        """Get comprehensive memory status"""
         ram = psutil.virtual_memory()
         gpu_used, gpu_cached = MemoryManager.check_gpu_memory()
-        
         return {
             'ram_percent': ram.percent,
             'ram_used_gb': ram.used / (1024 ** 3),
@@ -298,33 +276,25 @@ class MemoryManager:
             'needs_cleanup': MemoryManager.should_cleanup(),
             'needs_critical_cleanup': MemoryManager.should_critical_cleanup()
         }
-    
+
     @staticmethod
     def smart_cleanup():
-        """
-        Smart cleanup based on memory level.
-        Call this before memory-intensive operations, not after.
-        Returns True if cleanup was performed.
-        """
         current_mem = MemoryManager.check_memory()
-        
-        # Always clean if critical
+
         if current_mem > MemoryManager.CRITICAL_THRESHOLD:
             MemoryManager.force_cleanup()
             MemoryManager.force_gpu_cleanup()
             MemoryManager.record_cleanup()
             return True
-        
-        # Clean if above threshold and cooldown has passed
+
         if MemoryManager.should_cleanup(force=False):
             MemoryManager.force_cleanup()
-            # Only clean GPU if using CUDA
             gpu_used, _ = MemoryManager.check_gpu_memory()
-            if gpu_used > 1:  # Only clean if using >1GB GPU memory
+            if gpu_used > MemoryManager.GPU_CLEANUP_THRESHOLD_GB:
                 MemoryManager.force_gpu_cleanup()
             MemoryManager.record_cleanup()
             return True
-        
+
         return False
 
 class OllamaConnectionManager:
@@ -420,13 +390,13 @@ class ResponseGenerationService:
             self.llm = ChatOllama(
                 model=settings.OLLAMA_MODEL,
                 base_url=settings.OLLAMA_BASE_URL,
-                temperature=0.1,
-                num_ctx=32768,
-                num_predict=4096,
+                temperature=settings.OLLAMA_TEMPERATURE,
+                num_ctx=settings.OLLAMA_NUM_CTX,
+                num_predict=settings.OLLAMA_NUM_PREDICT,
             )
             logger.info(
                 f"Ollama LLM initialized successfully with model: {settings.OLLAMA_MODEL}, "
-                "num_ctx=32768, num_predict=4096"
+                f"num_ctx={settings.OLLAMA_NUM_CTX}, num_predict={settings.OLLAMA_NUM_PREDICT}"
             )
 
             # Initialize AgenticRAG (replaces single-pass get_related_docs)
@@ -654,24 +624,20 @@ class ResponseGenerationService:
                     )
                     return (True, "Header-like short query, auto-accepted")
 
-            # If the query contains any Khmer characters, accept it immediately.
-            # This covers pure Khmer ("km"), mixed Khmer+Latin ("multi"), and
-            # document section-header style queries like:
-            #   "(@All) | ?.?.? ??????????????????????????????????????????"
-            # LLM verification is unreliable for Khmer text, so we bypass it entirely.
-            has_khmer = any("\u1780" <= ch <= "\u17FF" for ch in user_input)
-            if has_khmer:
-                logger.info(f"Query verification ({detected_lang}): '{user_input}' -> True (Khmer content, auto-accepted)")
-                return (True, "Khmer content detected, auto-accepted")
+            verification_prompt = f"""Evaluate whether the user query is related to ANY of the following departments or CEO:
 
-            # English-only queries: use LLM to filter out gibberish
-            verification_prompt = f"""Evaluate if this is a real, meaningful query that makes sense to search for information.
+Core Banking System, Contact Center, Credit Business, Executive, Finance, Human Resources, Internal Audit, IT Infrastructure & Operation, Marketing and Communication, Product Development, Admin and Procurement, Risk Management, Research, Training and Development, Treasury, IT Security, Bancassurance, Management Information System, Legal and Compliance, Deposit and Service, Business, IT Project Management, Software Research and Development, Credit Underwriting, Operations, Digital Banking & Card Payment, Business Development, Supply Chain Financing Business, Credit Control, Research and Development, Agent and Digital Banking, Business Intelligent, Legal, Compliance
+
+Rules:
+- Approve if the query is clearly related to ANY of these departments (even indirectly)
+- Approve both English and Khmer queries
+- Reject if the query is unrelated (e.g., general chat, random topics, personal questions)
+- Reject if meaningless or gibberish
 
 Query: "{user_input}"
 
-Respond with ONLY one word: "yes" or "no"
-- "yes" if it's a real/meaningful query
-- "no" if it's gibberish or meaningless"""
+Answer ONLY:
+yes or no"""
 
             response = self.llm.invoke([HumanMessage(content=verification_prompt)])
             response_text = response.content.strip().lower()
@@ -764,8 +730,7 @@ Respond with ONLY one word: "yes" or "no"
 
     def get_related_docs(self, question: str, file_type=None, query_language: str = None, k: int = 5, doc_id: str = None):
         """
-        Get related documents with query expansion for short queries.
-        Short queries (<=5 words) are expanded using LLM for better semantic matching.
+        Get related documents for a user query.
         
         Args:
             doc_id: Optional document ID to filter results to a specific document
@@ -801,11 +766,6 @@ Respond with ONLY one word: "yes" or "no"
                 # Fall through to standard logic below
         # ----------------------------------------------------------------------
 
-        # Detect if query is short (5 words or less)
-        word_count = len(question.split())
-        is_short_query = word_count <= 5
-        
-        # Skip LLM expansion - use original query for testing
         search_query = question
         
         try:
@@ -966,12 +926,22 @@ Respond with ONLY one word: "yes" or "no"
 
         all_results = []
 
+        # Pre-compute query embedding once (avoids re-embedding per collection)
+        precomputed_vectors = None
+        try:
+            if self.vector_service and hasattr(self.vector_service, 'embedding'):
+                precomputed_vectors = self.vector_service.embedding.embed_query_hybrid(query)
+                logger.info(f"[TIMING] Pre-computed embedding once for {len(collection_names)} collections")
+        except Exception as e:
+            logger.warning(f"Failed to pre-compute embedding for multi-collection search: {e}")
+
         for collection_name in collection_names:
             try:
                 logger.info(f"DEBUG: Searching collection: {collection_name}")
                 # Use direct Qdrant search to preserve all payload fields
-                direct_results = self._search_single_collection_direct(collection_name, query, k, query_language)
-                logger.info(f"DEBUG: Collection {collection_name} returned {len(direct_results)} results")
+                _t_search = time.time()
+                direct_results = self._search_single_collection_direct(collection_name, query, k, query_language, precomputed_vectors=precomputed_vectors)
+                logger.info(f"DEBUG: Collection {collection_name} returned {len(direct_results)} results in {time.time()-_t_search:.2f}s")
                 all_results.extend(direct_results)
             except Exception as e:
                 logger.error(f"Error searching collection {collection_name}: {e}")
@@ -989,6 +959,7 @@ Respond with ONLY one word: "yes" or "no"
         k: int,
         query_language: str = None,
         source_filter: str = None,
+        precomputed_vectors: tuple = None,
     ):
         """Search a single collection using direct Qdrant client to preserve all payload fields (especially 'source').
 
@@ -1001,6 +972,7 @@ Respond with ONLY one word: "yes" or "no"
                 k,
                 query_language,
                 source_filter=source_filter,
+                precomputed_vectors=precomputed_vectors,
             )
             results = []
             for hit in points:
@@ -1113,6 +1085,10 @@ Respond with ONLY one word: "yes" or "no"
 
             embeddings_tensor = np.array(embeddings, dtype=np.float32)
             question_tensor = np.array(question_embedded, dtype=np.float32)
+
+            if embeddings_tensor.ndim != 2 or embeddings_tensor.shape[1] != question_tensor.shape[1]:
+                logger.warning(f"Vector dimension mismatch in history: question={question_tensor.shape}, stored={embeddings_tensor.shape}")
+                return []
 
             # Using cosine similarity for history matching
             cos_sin_score = util.cos_sim(question_tensor, embeddings_tensor)
@@ -2355,8 +2331,11 @@ Snippet:
                 logger.info("Skipping query reformulation - using original question")
             
             # Step 1: Query Refinement
-            logger.info(f"Step 1: Refining query...")
-            refined_query = self.refine_query(question)
+            from ..config import QUERY_VALIDATION_ENABLED
+            refined_query = question
+            if QUERY_VALIDATION_ENABLED:
+                logger.info(f"Step 1: Refining query...")
+                refined_query = self.refine_query(question)
             retrieval_query = refined_query
             
             # Validate that query refinement produced meaningful output
@@ -2373,7 +2352,7 @@ Snippet:
                     response_lang = "English"
                 return self._get_no_info_response(question_id, response_lang, simplified_output)
 
-            k = 50  # Retrieve more chunks for scoring
+            k = 20  # Retrieve chunks for scoring
 
             try:
                 detected_language = self.document_loader.detect_languages(retrieval_query)
@@ -2394,11 +2373,13 @@ Snippet:
                 query_language = 'en'
 
             try:
+                _t = {'start': time.time()}
                 logger.info(f"Detected_language: {language_name}, {detected_language}")
                 question_embedded = None
                 if self.vector_service and getattr(self.vector_service, 'embedding', None):
                     try:
                         question_embedded = self.vector_service.embedding.embed_query(retrieval_query)
+                        _t['embed'] = time.time()
                     except Exception as e:
                         logger.warning(f"Failed to embed query: {e}")
                         question_embedded = None
@@ -2442,6 +2423,7 @@ Snippet:
                         doc_id=doc_id,
                     )
                 logger.info(f"Related documents found: {len(related_docs) if related_docs else 0}")
+                _t['retrieval'] = time.time()
 
 
                 # Check memory after document retrieval
@@ -2852,39 +2834,10 @@ Snippet:
                 # Only include documents that actually have answers (not filtered out)
                 document_references = []
                 docs_with_answers = set(answer["doc_id"] for answer in answers)
-                
-                # Generate follow-up suggestions early (BEFORE exception handler path) to ensure they're always available
-                # This fixes the issue where suggestions would be missing when llm_content processing errors occur
-                logger.info(f"Preparing follow-up suggestions pool from {len(all_sections)} sections")
-                chunk_candidates_early = []
-                try:
-                    top_chunks = all_sections if isinstance(all_sections, list) else []
-                    if not top_chunks and isinstance(all_sections_top5, list):
-                        top_chunks = all_sections_top5
-                    for chunk in top_chunks[:6]:  # Take up to 6 chunks for candidates
-                        try:
-                            ref = chunk.get('reference') if isinstance(chunk, dict) else None
-                            chunk_candidates_early.append({
-                                'header': chunk.get('header', ''),
-                                'file_name': ref.get('file_name') if ref else '',
-                                'page': ref.get('page') if ref else None,
-                                'pages': [ref.get('page')] if ref and ref.get('page') else [],
-                                'text': chunk.get('text') if isinstance(chunk, dict) else str(chunk)
-                            })
-                        except Exception as e:
-                            logger.warning(f"Error processing chunk for early followup candidates: {e}")
-                except Exception as e:
-                    logger.warning(f"Error building early chunk_candidates for followups: {e}")
-                    chunk_candidates_early = []
-                
+                _t['process'] = time.time()
+
+                from ..config import FOLLOWUP_SUGGESTIONS_ENABLED
                 suggestions_early = []
-                if chunk_candidates_early:
-                    try:
-                        suggestions_early = self._generate_followup_questions(question, chunk_candidates_early[:4], 4, detected_language)
-                        logger.info(f"? Early generated {len(suggestions_early)} follow-up suggestions")
-                    except Exception as e:
-                        logger.warning(f"Early follow-up generation failed: {e}, will retry later")
-                        suggestions_early = []
 
                 for doc_id in sorted_doc_ids:  # Use same sort order as chunks
                     if doc_id in unique_docs and doc_id in docs_with_answers:
@@ -2991,9 +2944,9 @@ Snippet:
 
                     # Prepare history and response selection (limit answers & generate followups)
                     try:
-                        # Logic: Always show 1 answer (top chunk), generate 4 follow-up questions from remaining chunks
+                        # Logic: Always show 1 answer (top chunk), generate 3 follow-up questions from remaining chunks
                         top_n = 1  # Always show 1 answer
-                        suggestions_count = 4  # Always generate 4 follow-up questions
+                        suggestions_count = 3  # Always generate 3 follow-up questions
 
                         selected_answers = answers[:top_n]
                         selected_per_answer_references = per_answer_references[:top_n] if per_answer_references else []
@@ -3049,17 +3002,15 @@ Snippet:
 
                         # Generate follow-up suggestions using LLM
                         suggestions = []
-                        try:
-                            suggestions = self._generate_followup_questions(question, chunk_candidates[:4], suggestions_count, detected_language)
-                            logger.info(f"? Generated {len(suggestions)} follow-up suggestions (main path)")
-                        except Exception as e:
-                            logger.info(f"Follow-up generation failed (main path): {e}")
-                            # Fallback to early-generated suggestions if available
-                            if suggestions_early:
-                                suggestions = suggestions_early
-                                logger.info(f"? Using early-generated suggestions ({len(suggestions_early)} items) as fallback")
-                            else:
-                                suggestions = []
+                        if FOLLOWUP_SUGGESTIONS_ENABLED:
+                            try:
+                                suggestions = self._generate_followup_questions(question, chunk_candidates[:3], suggestions_count, detected_language)
+                                _t['followup_llm'] = time.time()
+                                logger.info(f"? Generated {len(suggestions)} follow-up suggestions")
+                            except Exception as e:
+                                logger.info(f"Follow-up generation failed: {e}")
+                        else:
+                            logger.info("Follow-up suggestions disabled via config")
 
                         # Build history payload using selected answers and suggestions
                         history_data = {
@@ -3096,6 +3047,15 @@ Snippet:
                         
                         # Debug: Check final combined_answer
                         logger.info(f"DEBUG: combined_answer has {combined_answer.count(chr(10))} newlines total")
+
+                        # Log timing summary
+                        _t['total'] = time.time()
+                        embed_t = _t.get('embed', _t['start']) - _t['start']
+                        retrieval_t = _t.get('retrieval', _t.get('embed', _t['start'])) - _t.get('embed', _t['start'])
+                        process_t = _t.get('process', _t.get('retrieval', _t['start'])) - _t.get('retrieval', _t['start'])
+                        followup_t = _t.get('followup_llm', _t.get('process', _t['start'])) - _t.get('process', _t['start'])
+                        other_t = _t['total'] - _t['start'] - embed_t - retrieval_t - process_t - followup_t
+                        logger.info(f"[TIMING] embed={embed_t:.2f}s | retrieval={retrieval_t:.2f}s | process={process_t:.2f}s | followup_llm={followup_t:.2f}s | other={other_t:.2f}s | total={_t['total']-_t['start']:.2f}s")
 
                         # Prepare final response payload
                         if simplified_output:

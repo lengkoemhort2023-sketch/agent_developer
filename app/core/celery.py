@@ -20,9 +20,8 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     # Allow workers to use GPU
-    worker_max_tasks_per_child=1,
-    # Configure worker to use GPU when available
     worker_enable_remote_control=True,
-    # Use solo pool to avoid forking and CUDA issues
-    worker_pool='solo',
+    # Thread pool avoids CUDA fork issues (threads share the same process)
+    # and allows multiple tasks to run in parallel, hitting Ollama concurrently.
+    worker_pool='threads',
 )

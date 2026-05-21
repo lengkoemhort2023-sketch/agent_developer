@@ -633,10 +633,10 @@ def list_feedback(request):
     """
     from user.models import User as UserModel  # local import to avoid circular
 
-    # Permission check — only superadmin group
+    # Permission check — only superuser / superadmin group
     user = request.user
     if not (user.is_authenticated and (
-        user.is_staff or user.is_superuser or
+        user.is_superuser or
         user.groups.filter(name__iexact="superadmin").exists()
     )):
         return error_response(

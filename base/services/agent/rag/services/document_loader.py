@@ -59,11 +59,20 @@ class BGEM3SemanticEmbeddings(Embeddings):
 
     def __init__(self, model_path: str):
         cuda_available = torch.cuda.is_available()
-        use_fp16 = cuda_available
-        device_label = "CUDA (FP16)" if cuda_available else "CPU (FP32)"
-        logger.info(f"[DocumentLoader] Loading BGE-M3 for semantic chunking on {device_label}.")
-        self._model = BGEM3FlagModel(model_path, use_fp16=use_fp16)
-        logger.info(f"[DocumentLoader] BGE-M3 semantic chunking model ready (cuda={cuda_available}).")
+        self._model = None
+
+        if cuda_available:
+            try:
+                logger.info("[DocumentLoader] GPU detected — loading BGE-M3 for semantic chunking on CUDA (FP16).")
+                self._model = BGEM3FlagModel(model_path, use_fp16=True)
+                logger.info(f"[DocumentLoader] BGE-M3 semantic chunking model ready (cuda=True, fp16=True).")
+            except Exception as gpu_exc:
+                logger.warning(f"[DocumentLoader] GPU load failed ({gpu_exc}), retrying on CPU (FP32)...")
+
+        if self._model is None:
+            logger.info("[DocumentLoader] Loading BGE-M3 for semantic chunking on CPU (FP32).")
+            self._model = BGEM3FlagModel(model_path, use_fp16=False)
+            logger.info(f"[DocumentLoader] BGE-M3 semantic chunking model ready (cuda=False, fp16=False).")
 
     def embed_documents(self, texts: list) -> list:
         output = self._model.encode(texts, return_dense=True, return_sparse=False)

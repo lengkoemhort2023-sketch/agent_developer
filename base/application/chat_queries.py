@@ -1,13 +1,10 @@
 import json
-import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from django.utils import timezone
 
 from chat.models import ChatInput, ChatMessage, ChatSession
-
-logger = logging.getLogger(__name__)
 
 
 def serialize_bot_response(bot_response: Any) -> str:
@@ -123,15 +120,6 @@ class AnswerUserQueryHandler:
             doc_id=doc_id,
         )
 
-        # Extract suggestions from bot_response
-        suggestions = (
-            bot_response.get("suggestions", [])
-            if isinstance(bot_response, dict)
-            else []
-        )
-        logger.info(f"[DEBUG] bot_response type: {type(bot_response)}, has suggestions key: {'suggestions' in bot_response if isinstance(bot_response, dict) else 'N/A'}")
-        logger.info(f"[DEBUG] Extracted suggestions: {suggestions} (type: {type(suggestions)}, length: {len(suggestions) if isinstance(suggestions, list) else 'N/A'})")
-
         message = ChatMessage.objects.create(
             session=session,
             question=question,
@@ -139,9 +127,10 @@ class AnswerUserQueryHandler:
             document_references=bot_response.get("document_references", [])
             if isinstance(bot_response, dict)
             else [],
-            suggestions=suggestions,
+            suggestions=bot_response.get("suggestions", [])
+            if isinstance(bot_response, dict)
+            else [],
         )
-        logger.info(f"[DEBUG] ChatMessage created with suggestions: {message.suggestions}")
 
         chat_input.message = message
         chat_input.processed_at = timezone.now()

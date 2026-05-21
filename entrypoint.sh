@@ -6,8 +6,8 @@ export PYTHONPATH="$APP_ROOT:$PYTHONPATH"
 
 QDRANT_HOST="${QDRANT_HOST:-qdrant}"
 QDRANT_PORT="${QDRANT_PORT:-6333}"
-DJANGO_RUNSERVER_HOST="${DJANGO_RUNSERVER_HOST:-0.0.0.0}"
-DJANGO_RUNSERVER_PORT="${DJANGO_RUNSERVER_PORT:-8001}"
+DJANGO_RUNSERVER_HOST="${DJANGO_RUNSERVER_HOST:-127.0.0.1}"
+DJANGO_RUNSERVER_PORT="${DJANGO_RUNSERVER_PORT:-8000}"
 
 # Wait for PostgreSQL
 if [ "$DATABASE" = "postgres" ]; then
@@ -42,6 +42,22 @@ else
     # Run migrations
     echo "[INFO] Running migrations..."
     python manage.py migrate
+
+    if [ "${RUN_GUNICORN:-true}" = "true" ] || [ "${RUN_GUNICORN:-true}" = "1" ]; then
+        GUNICORN_BIND="${GUNICORN_BIND:-127.0.0.1:${DJANGO_RUNSERVER_PORT}}"
+        GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+        GUNICORN_THREADS="${GUNICORN_THREADS:-8}"
+        GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-180}"
+
+        echo "[INFO] Starting Gunicorn: bind=${GUNICORN_BIND}, workers=${GUNICORN_WORKERS}, threads=${GUNICORN_THREADS}"
+        exec gunicorn \
+            app.core.wsgi:application \
+            --bind "${GUNICORN_BIND}" \
+            --worker-class gthread \
+            --workers "${GUNICORN_WORKERS}" \
+            --threads "${GUNICORN_THREADS}" \
+            --timeout "${GUNICORN_TIMEOUT}"
+    fi
 
     echo "[INFO] Starting Django development server..."
     exec python manage.py runserver "${DJANGO_RUNSERVER_HOST}:${DJANGO_RUNSERVER_PORT}"

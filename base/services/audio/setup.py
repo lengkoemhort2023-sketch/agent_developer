@@ -205,7 +205,7 @@ def get_transcription_model():
                 _whisper_model = WhisperModel(
                     model_path,
                     device="cuda",
-                    compute_type="float16",
+                    compute_type="bfloat16",
                     local_files_only=True,
                 )
                 print("✓ Whisper model loaded on GPU successfully")

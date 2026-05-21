@@ -1,11 +1,11 @@
-name: agent_developer_alt
+name: agent_developer
 
 services:
     web:
         build:
             context: ../agent_developer
             dockerfile: Dockerfile
-        image: agent-api-alt
+        image: agent-api
         command: /usr/src/app/entrypoint.sh
         volumes:
             - ../agent_developer:/usr/src/app/
@@ -13,10 +13,17 @@ services:
             - ../agent_developer/app/models:/usr/src/app/models
             - mediafiles:/usr/src/app/mediafiles
             - staticfiles:/usr/src/app/staticfiles
+        gpus: all
+        shm_size: "8gb"
         ports:
-            - 8001:8001
+            - 8000:8000
         env_file:
             - ./.env.dev
+        environment:
+            - RUN_GUNICORN=true
+            - GUNICORN_WORKERS=1
+            - GUNICORN_THREADS=8
+            - GUNICORN_TIMEOUT=180
         depends_on:
             - db
             - redis
@@ -34,51 +41,67 @@ services:
                           capabilities: [gpu]
         restart: unless-stopped
         healthcheck:
-            test: ["CMD", "curl", "-f", "http://localhost:8001/health/"]
+            test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
             interval: 30s
             timeout: 10s
             retries: 3
             start_period: 40s
-
     db:
         image: postgres:15
         ports:
-            - 5434:5432
+            - 5433:5432
         volumes:
-            - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data/
+            - postgres_data:/var/lib/postgresql/data/
+            - /mnt/back-up/postgres:/backups
         environment:
             - POSTGRES_USER=postgres
             - POSTGRES_PASSWORD=postgres
             - POSTGRES_DB=postgres
         networks:
             - net
-
+        deploy:
+            resources:
+                limits:
+                    memory: 8G
+                reservations:
+                    memory: 2G
     qdrant:
         image: qdrant/qdrant:latest
         volumes:
-            - ${DATA_DIR:-./data}/qdrant:/qdrant/storage
+            - qdrant_data:/qdrant/storage
+            - /mnt/back-up/qdrant:/qdrant/snapshots
         ports:
-            - 6334:6333
+            - 6333:6333
         environment:
             - QDRANT__SERVICE__HTTP_PORT=6333
         restart: unless-stopped
         networks:
             - net
-
+        deploy:
+            resources:
+                limits:
+                    memory: 16G
+                reservations:
+                    memory: 8G
     redis:
         image: redis:alpine
         restart: unless-stopped
         ports:
-            - 6381:6379
+            - 6380:6379
         volumes:
-            - ${DATA_DIR:-./data}/redis:/data
+            - redis_data:/data
         networks:
             - net
-
+        deploy:
+            resources:
+                limits:
+                    memory: 2G
+                reservations:
+                    memory: 512M
     celery:
-        image: agent-api-alt
+        image: agent-api
         entrypoint: /usr/src/app/entrypoint.sh
-        command: celery -A app.core worker -l info -E --concurrency=1
+        command: celery -A app.core worker -l info -E --concurrency=3
         env_file:
             - ./.env.dev
         environment:
@@ -88,6 +111,9 @@ services:
             - ../agent_developer/app/models:/usr/src/app/models
             - mediafiles:/usr/src/app/mediafiles
             - staticfiles:/usr/src/app/staticfiles
+        gpus: all
+        shm_size: "8gb"
+        restart: unless-stopped
         depends_on:
             - db
             - redis
@@ -97,15 +123,16 @@ services:
             - net
         deploy:
             resources:
+                limits:
+                    memory: 24G
                 reservations:
                     memory: 16G
                     devices:
                         - driver: nvidia
                           count: 1
                           capabilities: [gpu]
-
     beat:
-        image: agent-api-alt
+        image: agent-api
         entrypoint: /usr/src/app/entrypoint.sh
         command: celery -A app.core beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
         env_file:
@@ -120,8 +147,10 @@ services:
         networks:
             - net
         restart: unless-stopped
-
 volumes:
+    postgres_data:
+    redis_data:
+    qdrant_data:
     mediafiles:
     staticfiles:
 

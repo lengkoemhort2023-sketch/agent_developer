@@ -50,7 +50,7 @@ class QueryPlanner:
     """
     Analyzes a user question and produces a :class:`QueryPlan`.
 
-    Uses the configured LLM (gemma3:27b) to classify intent and generate
+    Uses the configured LLM (gemma4:26b) to classify intent and generate
     sub-queries.  Falls back to a lightweight heuristic if the LLM fails or
     returns invalid JSON.
     """

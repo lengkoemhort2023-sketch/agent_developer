@@ -13,6 +13,7 @@ import user.views as user_views
 from django.conf.urls.static import static
 from django.conf import settings
 from django.http import HttpResponse
+from chat.views import submit_feedback
 
 BASE_PREFIX = 'api/'
 
@@ -44,6 +45,7 @@ urlpatterns = [
     ])),
     # Add download URL pattern
     path('download/', download_file, name='download_file'),
+    path('feedback/', submit_feedback, name='submit_feedback_root'),
     path('media/protected/<path:path>', protected_media, name='protected_media'),
     path('media/<path:path>', protected_media, name='media_file'),
     path('docx_extracted_images/<path:path>', docx_extracted_media, name='docx_extracted_image_file'),
