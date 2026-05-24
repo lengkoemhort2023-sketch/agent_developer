@@ -184,53 +184,40 @@ def get_transcription_model():
             print(f"✗ {error_msg}")
             raise Exception(error_msg)
 
-        # Check GPU availability first
-        gpu_available = False
+        # Determine device priority: CUDA -> MPS -> CPU
+        # faster-whisper uses ctranslate2 which does not support MPS; MPS falls through to CPU
+        whisper_device = "cpu"
         try:
             import torch
 
-            gpu_available = torch.cuda.is_available()
-            if gpu_available:
-                print(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
+            if torch.cuda.is_available():
+                whisper_device = "cuda"
+                print(f"✓ CUDA GPU detected: {torch.cuda.get_device_name(0)}")
+            elif torch.backends.mps.is_available():
+                print("⚠ MPS detected but not supported by faster-whisper (ctranslate2), using CPU")
             else:
                 print("⚠ No GPU detected, will use CPU")
         except ImportError:
-            print("⚠ PyTorch not available, will attempt GPU anyway")
-            gpu_available = None  # Unknown, let whisper try
+            print("⚠ PyTorch not available, attempting CUDA anyway")
+            whisper_device = "cuda"
 
-        # Try GPU first if available, fallback to CPU
-        if gpu_available or gpu_available is None:
+        if whisper_device == "cuda":
             try:
-                print("Attempting to load Whisper model on GPU...")
+                print("Attempting to load Whisper model on CUDA...")
                 _whisper_model = WhisperModel(
                     model_path,
                     device="cuda",
                     compute_type="bfloat16",
                     local_files_only=True,
                 )
-                print("✓ Whisper model loaded on GPU successfully")
+                print("✓ Whisper model loaded on CUDA successfully")
             except Exception as e:
-                print(f"⚠ GPU loading failed ({e}), falling back to CPU...")
-                try:
-                    _whisper_model = WhisperModel(
-                        model_path,
-                        device="cpu",
-                        compute_type="int8",
-                        local_files_only=True,
-                    )
-                    print("✓ Whisper model loaded on CPU")
-                except Exception as cpu_error:
-                    error_msg = (
-                        "Failed to load Whisper model on both GPU and CPU. "
-                        f"The model files may be corrupted. Error: {str(cpu_error)}"
-                    )
-                    _model_load_error = error_msg
-                    print(f"✗ {error_msg}")
-                    raise Exception(error_msg)
-        else:
-            # GPU not available, load directly on CPU
-            print("Loading Whisper model on CPU...")
+                print(f"⚠ CUDA loading failed ({e}), falling back to CPU...")
+                whisper_device = "cpu"
+
+        if whisper_device == "cpu":
             try:
+                print("Loading Whisper model on CPU...")
                 _whisper_model = WhisperModel(
                     model_path,
                     device="cpu",

@@ -59,20 +59,29 @@ class BGEM3SemanticEmbeddings(Embeddings):
 
     def __init__(self, model_path: str):
         cuda_available = torch.cuda.is_available()
+        mps_available = torch.backends.mps.is_available()
         self._model = None
 
         if cuda_available:
             try:
-                logger.info("[DocumentLoader] GPU detected — loading BGE-M3 for semantic chunking on CUDA (FP16).")
+                logger.info("[DocumentLoader] CUDA detected — loading BGE-M3 for semantic chunking on CUDA (FP16).")
                 self._model = BGEM3FlagModel(model_path, use_fp16=True)
-                logger.info(f"[DocumentLoader] BGE-M3 semantic chunking model ready (cuda=True, fp16=True).")
+                logger.info("[DocumentLoader] BGE-M3 semantic chunking model ready (device=cuda, fp16=True).")
             except Exception as gpu_exc:
-                logger.warning(f"[DocumentLoader] GPU load failed ({gpu_exc}), retrying on CPU (FP32)...")
+                logger.warning(f"[DocumentLoader] CUDA load failed ({gpu_exc}), trying MPS or CPU...")
+
+        if self._model is None and mps_available:
+            try:
+                logger.info("[DocumentLoader] MPS detected — loading BGE-M3 for semantic chunking on MPS (FP16).")
+                self._model = BGEM3FlagModel(model_path, use_fp16=True)
+                logger.info("[DocumentLoader] BGE-M3 semantic chunking model ready (device=mps, fp16=True).")
+            except Exception as mps_exc:
+                logger.warning(f"[DocumentLoader] MPS load failed ({mps_exc}), retrying on CPU (FP32)...")
 
         if self._model is None:
             logger.info("[DocumentLoader] Loading BGE-M3 for semantic chunking on CPU (FP32).")
             self._model = BGEM3FlagModel(model_path, use_fp16=False)
-            logger.info(f"[DocumentLoader] BGE-M3 semantic chunking model ready (cuda=False, fp16=False).")
+            logger.info("[DocumentLoader] BGE-M3 semantic chunking model ready (device=cpu, fp16=False).")
 
     def embed_documents(self, texts: list) -> list:
         output = self._model.encode(texts, return_dense=True, return_sparse=False)

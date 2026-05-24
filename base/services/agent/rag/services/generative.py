@@ -206,6 +206,9 @@ class MemoryManager:
                 gpu_memory = torch.cuda.memory_allocated() / (1024 ** 3)
                 gpu_memory_cached = torch.cuda.memory_reserved() / (1024 ** 3)
                 return gpu_memory, gpu_memory_cached
+            elif torch.backends.mps.is_available():
+                gpu_memory = torch.mps.current_allocated_memory() / (1024 ** 3)
+                return gpu_memory, 0
             return 0, 0
         except Exception:
             return 0, 0
@@ -226,7 +229,7 @@ class MemoryManager:
 
     @staticmethod
     def force_gpu_cleanup():
-        if not torch.cuda.is_available():
+        if not torch.cuda.is_available() and not torch.backends.mps.is_available():
             return False
 
         if not MemoryManager._gpu_cleanup_lock.acquire(blocking=False):
@@ -234,9 +237,12 @@ class MemoryManager:
             return False
 
         try:
-            torch.cuda.empty_cache()
-            if hasattr(torch.cuda, 'reset_peak_memory_stats'):
-                torch.cuda.reset_peak_memory_stats()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                    torch.cuda.reset_peak_memory_stats()
+            elif torch.backends.mps.is_available():
+                torch.mps.empty_cache()
             return True
         except Exception as e:
             logging.warning(f"GPU cleanup warning: {e}")

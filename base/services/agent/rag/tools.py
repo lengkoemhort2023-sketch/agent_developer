@@ -99,6 +99,7 @@ class RAGTools:
                     return _GLOBAL_RERANKER
                 
                 cuda_available = torch.cuda.is_available()
+                mps_available = torch.backends.mps.is_available()
                 reranker = None
 
                 if cuda_available:
@@ -109,9 +110,21 @@ class RAGTools:
                             warnings.filterwarnings("ignore", message=".*fix_mistral_regex.*")
                             warnings.filterwarnings("ignore", message=".*tokenizer you are loading.*")
                             reranker = _FlagReranker(RERANKER_MODEL_PATH, use_fp16=True)
-                        logger.info(f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} (fp16=True, cuda=True)")
+                        logger.info(f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} (device=cuda, fp16=True)")
                     except Exception as gpu_exc:
-                        logger.warning(f"[Tools] GPU load failed ({gpu_exc}), retrying on CPU (FP32)...")
+                        logger.warning(f"[Tools] CUDA load failed ({gpu_exc}), trying MPS or CPU...")
+
+                if reranker is None and mps_available:
+                    try:
+                        logger.info("[Tools] Loading bge-reranker-v2-m3 on MPS (FP16).")
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", message=".*incorrect regex pattern.*")
+                            warnings.filterwarnings("ignore", message=".*fix_mistral_regex.*")
+                            warnings.filterwarnings("ignore", message=".*tokenizer you are loading.*")
+                            reranker = _FlagReranker(RERANKER_MODEL_PATH, use_fp16=True)
+                        logger.info(f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} (device=mps, fp16=True)")
+                    except Exception as mps_exc:
+                        logger.warning(f"[Tools] MPS load failed ({mps_exc}), retrying on CPU (FP32)...")
 
                 if reranker is None:
                     try:
@@ -121,7 +134,7 @@ class RAGTools:
                             warnings.filterwarnings("ignore", message=".*fix_mistral_regex.*")
                             warnings.filterwarnings("ignore", message=".*tokenizer you are loading.*")
                             reranker = _FlagReranker(RERANKER_MODEL_PATH, use_fp16=False)
-                        logger.info(f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} (fp16=False, cuda=False)")
+                        logger.info(f"[Tools] bge-reranker-v2-m3 loaded from {RERANKER_MODEL_PATH} (device=cpu, fp16=False)")
                     except Exception as cpu_exc:
                         logger.warning(
                             f"[Tools] Could not load bge-reranker-v2-m3 on CPU ({cpu_exc}). "

@@ -113,20 +113,31 @@ class BGEM3EmbeddingFunction(Embeddings):
 
             logger.info(f"Initializing BGEM3FlagModel from path: {model_path}")
             cuda_available = torch.cuda.is_available()
+            mps_available = torch.backends.mps.is_available()
+            use_fp16 = cuda_available or mps_available
             self.model = None
 
             if cuda_available:
                 try:
-                    logger.info("[VectorStore] GPU detected — loading BGE-M3 with FP16 on CUDA.")
+                    logger.info("[VectorStore] CUDA detected — loading BGE-M3 with FP16 on CUDA.")
                     self.model = BGEM3FlagModel(model_path, use_fp16=True)
-                    logger.info(f"BGEM3 model loaded successfully from path: {model_path} (cuda=True, fp16=True)")
+                    logger.info(f"BGEM3 model loaded successfully from path: {model_path} (device=cuda, fp16=True)")
                 except Exception as gpu_exc:
-                    logger.warning(f"[VectorStore] GPU load failed ({gpu_exc}), retrying on CPU (FP32)...")
+                    logger.warning(f"[VectorStore] CUDA load failed ({gpu_exc}), trying MPS or CPU...")
+
+            if self.model is None and mps_available:
+                try:
+                    logger.info("[VectorStore] MPS detected — loading BGE-M3 with FP16 on MPS.")
+                    self.model = BGEM3FlagModel(model_path, use_fp16=True)
+                    logger.info(f"BGEM3 model loaded successfully from path: {model_path} (device=mps, fp16=True)")
+                except Exception as mps_exc:
+                    logger.warning(f"[VectorStore] MPS load failed ({mps_exc}), retrying on CPU (FP32)...")
+                    use_fp16 = False
 
             if self.model is None:
                 logger.info("[VectorStore] Loading BGE-M3 with FP32 on CPU.")
                 self.model = BGEM3FlagModel(model_path, use_fp16=False)
-                logger.info(f"BGEM3 model loaded successfully from path: {model_path} (cuda=False, fp16=False)")
+                logger.info(f"BGEM3 model loaded successfully from path: {model_path} (device=cpu, fp16=False)")
 
         except Exception as e:
             logger.error(f"Error initializing embedding model: {str(e)}")
