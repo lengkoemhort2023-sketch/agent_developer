@@ -34,7 +34,7 @@ except ImportError:
 
 qdrant_host = settings.QDRANT_HOST
 qdrant_port = settings.QDRANT_PORT
-EMBED_BATCH_SIZE = 64
+EMBED_BATCH_SIZE = 2
 QDRANT_UPSERT_BATCH_SIZE = 128
 
 def detect_lang_quick(text: str) -> str:

@@ -35,6 +35,8 @@ except ImportError:
 from .celerybeat_schedule import CELERY_BEAT_SCHEDULE
 
 load_environment()
+# Disable django-prometheus thread exporter early to avoid autoreloader conflicts (prevents AssertionError in development)
+os.environ.setdefault('PROMETHEUS_DISABLE_THREAD_EXPORTER', '1')
 logger = logging.getLogger(__name__)
 
 
@@ -122,6 +124,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'django_celery_results',
     'django_celery_beat',
+    'django_prometheus',
     'user.apps.UserConfig',
     'rest_framework_simplejwt.token_blacklist',
     'base',
@@ -150,6 +153,9 @@ SILENCED_SYSTEM_CHECKS = ["security.W019"]
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    'app.core.middleware.RequestIDMiddleware',
+    'app.core.middleware.APIMetricsMiddleware',
+    'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'base.middleware.TraceIDMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -163,6 +169,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "base.middleware.CustomErrorHandlerMiddleware",
     "base.middlewares.connection_reset_middleware.ConnectionResetMiddleware",
+    'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
 # Proxy header configuration for nginx reverse proxy
@@ -461,3 +468,41 @@ AUTH_LDAP_ADMIN_GROUP_NAME = os.environ.get("AUTH_LDAP_ADMIN_GROUP_NAME", "admin
 # Django groups to assign (must exist in Django)
 AUTH_LDAP_DJANGO_ADMIN_GROUP = os.environ.get("AUTH_LDAP_DJANGO_ADMIN_GROUP", "Admin")
 AUTH_LDAP_DJANGO_USER_GROUP = os.environ.get("AUTH_LDAP_DJANGO_USER_GROUP", "User")
+
+# ============================================================================
+# OBSERVABILITY & MONITORING
+# ============================================================================
+
+# Initialize observability stack
+from app.core.observability import observability
+observability.initialize(globals())
+
+# Prometheus metrics endpoint configuration
+PROMETHEUS_METRICS_EXPORT_PORT = env_int("PROMETHEUS_METRICS_EXPORT_PORT", 8000)
+
+# OpenTelemetry configuration
+OTEL_ENABLED = env_bool("OTEL_ENABLED", True)
+OTEL_METRICS_ENABLED = env_bool("OTEL_METRICS_ENABLED", True)
+OTEL_SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "amk-agent")
+OTEL_SERVICE_VERSION = os.environ.get("OTEL_SERVICE_VERSION", "1.0.0")
+OTEL_ENVIRONMENT = os.environ.get("OTEL_ENVIRONMENT", "development")
+OTEL_EXPORTER_OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo:4317")
+
+# Langfuse configuration (for LLM observability)
+LANGFUSE_ENABLED = env_bool("LANGFUSE_ENABLED", False)
+LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "http://localhost:3000")
+
+# Loki logging configuration
+LOKI_ENABLED = env_bool("LOKI_ENABLED", True)
+LOKI_ENDPOINT = os.environ.get("LOKI_ENDPOINT", "http://loki:3100")
+
+# Django-Prometheus configuration
+# Disable automatic thread-based exporter (we use URL exporter instead at /api/metrics/)
+# This prevents conflicts with Django's autoreloader in development
+PROMETHEUS_EXPORT_MIGRATIONS = env_bool("PROMETHEUS_EXPORT_MIGRATIONS", True)
+if os.environ.get("RUN_MAIN") == "true":
+    # In autoreloader child process - disable thread exporter
+    os.environ["PROMETHEUS_DISABLE_THREAD_EXPORTER"] = "1"
+

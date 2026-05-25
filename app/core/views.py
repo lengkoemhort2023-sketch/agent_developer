@@ -306,3 +306,17 @@ def download_file(request):
         return response
     except Exception:
         raise Http404()
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def metrics_view(request):
+    """
+    Prometheus metrics endpoint
+    Exposes all collected metrics from the observability stack.
+    """
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from django.http import HttpResponse
+    
+    metrics_output = generate_latest()
+    return HttpResponse(metrics_output, content_type=CONTENT_TYPE_LATEST)

@@ -5,6 +5,7 @@ from .views import (
     get_signed_download_url,
     protected_media,
     docx_extracted_media,
+    metrics_view,
 )
 from django.contrib import admin
 from django.urls import path, include
@@ -42,6 +43,7 @@ urlpatterns = [
         path('ldap/health/', ldap_health_check, name='ldap_health_check'),
         path('qdrant/health/', qdrant_health_check, name='qdrant_health_check'),
         path('get-signed-download-url/', get_signed_download_url, name='get_signed_download_url'),
+        path('metrics/', metrics_view, name='metrics'),
     ])),
     # Add download URL pattern
     path('download/', download_file, name='download_file'),
