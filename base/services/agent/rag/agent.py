@@ -34,7 +34,17 @@ The return value is 100 % compatible with the existing downstream processing
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
+
+from base.monitoring.metrics import (
+    rag_chunks_returned,
+    rag_confidence_score,
+    rag_request_duration_seconds,
+    rag_requests_total,
+    rag_retrieval_attempts_total,
+)
+from base.tracing import get_tracer
 
 from .config import (
     AGENTIC_RAG_ENABLED,
@@ -119,47 +129,77 @@ class AgenticRAG:
             f"lang={language} collection={collection_name} doc_id={doc_id}"
         )
 
-        # ── 1. Language gate ──────────────────────────────────────────────────
-        if language not in SUPPORTED_LANGUAGES:
-            logger.warning(f"[AgenticRAG] Unsupported language '{language}' — rejecting")
-            return {}
+        _start = time.perf_counter()
+        _tracer = get_tracer("docbot.rag")
 
-        # ── 2. Plan ───────────────────────────────────────────────────────────
-        plan: QueryPlan = self.planner.plan(question, language)
-        logger.info(
-            f"[AgenticRAG] Plan: intent={plan.intent}  "
-            f"sub_queries={plan.sub_queries}  needs_table={plan.needs_table}"
-        )
+        with _tracer.start_as_current_span("rag.get_docs") as span:
+            span.set_attribute("rag.language", language)
+            span.set_attribute("rag.question_len", len(question))
+            span.set_attribute("rag.collection", collection_name or "all")
 
-        # ── 3+4. Multi-step retrieval with retry ──────────────────────────────
-        top_chunks = self._retrieve_with_retry(
-            question=question,
-            plan=plan,
-            collection_name=collection_name,
-            doc_id=doc_id,
-        )
+            # ── 1. Language gate ──────────────────────────────────────────────
+            if language not in SUPPORTED_LANGUAGES:
+                logger.warning(f"[AgenticRAG] Unsupported language '{language}' — rejecting")
+                rag_requests_total.labels(language=language, status="language_rejected").inc()
+                span.set_attribute("rag.status", "language_rejected")
+                return {}
 
-        if not top_chunks:
-            logger.warning("[AgenticRAG] No chunks after all retrieval attempts")
-            return {}
-
-        # ── 5. Confidence gate ────────────────────────────────────────────────
-        threshold = CONFIDENCE_THRESHOLD_KM if language == "km" else CONFIDENCE_THRESHOLD_EN
-        confidence = self.tools.confidence_score(question, top_chunks)
-
-        if confidence < threshold:
-            logger.warning(
-                f"[AgenticRAG] Confidence {confidence:.4f} < threshold {threshold:.4f} "
-                f"— returning empty (no-info path)"
+            # ── 2. Plan ───────────────────────────────────────────────────────
+            with _tracer.start_as_current_span("rag.plan") as plan_span:
+                plan: QueryPlan = self.planner.plan(question, language)
+                plan_span.set_attribute("rag.intent", plan.intent or "")
+                plan_span.set_attribute("rag.sub_queries_count", len(plan.sub_queries))
+            logger.info(
+                f"[AgenticRAG] Plan: intent={plan.intent}  "
+                f"sub_queries={plan.sub_queries}  needs_table={plan.needs_table}"
             )
-            return {}
 
-        logger.info(
-            f"[AgenticRAG] Confidence {confidence:.4f} ≥ {threshold:.4f} — proceeding"
-        )
+            # ── 3+4. Multi-step retrieval with retry ──────────────────────────
+            top_chunks = self._retrieve_with_retry(
+                question=question,
+                plan=plan,
+                collection_name=collection_name,
+                doc_id=doc_id,
+                language=language,
+            )
 
-        # ── 6. Convert to get_related_docs() format ───────────────────────────
-        return self._to_combined_docs(top_chunks)
+            if not top_chunks:
+                logger.warning("[AgenticRAG] No chunks after all retrieval attempts")
+                rag_requests_total.labels(language=language, status="empty").inc()
+                rag_request_duration_seconds.labels(language=language).observe(time.perf_counter() - _start)
+                span.set_attribute("rag.status", "empty")
+                return {}
+
+            # ── 5. Confidence gate ────────────────────────────────────────────
+            threshold = CONFIDENCE_THRESHOLD_KM if language == "km" else CONFIDENCE_THRESHOLD_EN
+            with _tracer.start_as_current_span("rag.confidence") as conf_span:
+                confidence = self.tools.confidence_score(question, top_chunks)
+                conf_span.set_attribute("rag.confidence", round(confidence, 4))
+                conf_span.set_attribute("rag.threshold", threshold)
+            rag_confidence_score.labels(language=language).observe(confidence)
+
+            if confidence < threshold:
+                logger.warning(
+                    f"[AgenticRAG] Confidence {confidence:.4f} < threshold {threshold:.4f} "
+                    f"— returning empty (no-info path)"
+                )
+                rag_requests_total.labels(language=language, status="confidence_fail").inc()
+                rag_request_duration_seconds.labels(language=language).observe(time.perf_counter() - _start)
+                span.set_attribute("rag.status", "confidence_fail")
+                return {}
+
+            logger.info(f"[AgenticRAG] Confidence {confidence:.4f} ≥ {threshold:.4f} — proceeding")
+
+            # ── 6. Convert to get_related_docs() format ───────────────────────
+            result = self._to_combined_docs(top_chunks)
+            total_chunks = sum(len(d["chunks"]) for d in result.values())
+            rag_chunks_returned.labels(language=language).observe(total_chunks)
+            rag_requests_total.labels(language=language, status="success").inc()
+            rag_request_duration_seconds.labels(language=language).observe(time.perf_counter() - _start)
+            span.set_attribute("rag.status", "success")
+            span.set_attribute("rag.chunks_returned", total_chunks)
+            span.set_attribute("rag.docs_returned", len(result))
+            return result
 
     # ── Private: retrieval with retry ─────────────────────────────────────────
 
@@ -169,6 +209,7 @@ class AgenticRAG:
         plan: QueryPlan,
         collection_name: Optional[str],
         doc_id: Optional[str],
+        language: str = "en",
     ) -> List[dict]:
         """
         Call :meth:`AgenticRetriever.retrieve` up to ``MAX_RETRIES + 1`` times.
@@ -180,6 +221,7 @@ class AgenticRAG:
         attempts = MAX_RETRIES + 1
 
         for attempt in range(attempts):
+            rag_retrieval_attempts_total.labels(language=language).inc()
             chunks = self.retriever.retrieve(
                 question=question,
                 plan=current_plan,

@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 class JSONFormatter(logging.Formatter):
     """Format logs as JSON for easy parsing and aggregation"""
-    
+
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON"""
         log_data: Dict[str, Any] = {
@@ -24,11 +24,22 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno,
         }
-        
+
+        # Inject OTel trace/span IDs so Grafana can correlate logs ↔ traces
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            ctx = span.get_span_context()
+            if ctx and ctx.is_valid:
+                log_data["trace_id"] = format(ctx.trace_id, "032x")
+                log_data["span_id"] = format(ctx.span_id, "016x")
+        except Exception:
+            pass
+
         # Include exception info if present
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
-        
+
         # Include extra fields
         if hasattr(record, 'request_id'):
             log_data["request_id"] = record.request_id
@@ -36,7 +47,7 @@ class JSONFormatter(logging.Formatter):
             log_data["user_id"] = record.user_id
         if hasattr(record, 'extra'):
             log_data["extra"] = record.extra
-        
+
         return json.dumps(log_data)
 
 
@@ -144,6 +155,12 @@ def configure_logging(debug: bool = False) -> None:
             },
             # Document logger
             'document': {
+                'handlers': ['console', 'file'],
+                'level': 'DEBUG' if debug else 'INFO',
+                'propagate': False,
+            },
+            # Base services logger (RAG pipeline, generative service, etc.)
+            'base': {
                 'handlers': ['console', 'file'],
                 'level': 'DEBUG' if debug else 'INFO',
                 'propagate': False,

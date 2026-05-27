@@ -122,6 +122,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_prometheus',
     'django_celery_results',
     'django_celery_beat',
     'django_prometheus',
@@ -152,6 +153,7 @@ X_FRAME_OPTIONS = "ALLOWALL"
 SILENCED_SYSTEM_CHECKS = ["security.W019"]
 
 MIDDLEWARE = [
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",  # must be first
     "corsheaders.middleware.CorsMiddleware",
     'app.core.middleware.RequestIDMiddleware',
     'app.core.middleware.APIMetricsMiddleware',
@@ -169,7 +171,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "base.middleware.CustomErrorHandlerMiddleware",
     "base.middlewares.connection_reset_middleware.ConnectionResetMiddleware",
-    'django_prometheus.middleware.PrometheusAfterMiddleware',
+    "django_prometheus.middleware.PrometheusAfterMiddleware",   # must be last
 ]
 
 # Proxy header configuration for nginx reverse proxy
@@ -505,4 +507,3 @@ PROMETHEUS_EXPORT_MIGRATIONS = env_bool("PROMETHEUS_EXPORT_MIGRATIONS", True)
 if os.environ.get("RUN_MAIN") == "true":
     # In autoreloader child process - disable thread exporter
     os.environ["PROMETHEUS_DISABLE_THREAD_EXPORTER"] = "1"
-

@@ -112,32 +112,15 @@ class BGEM3EmbeddingFunction(Embeddings):
                 raise ImportError("BGEM3FlagModel is required for hybrid embeddings; ensure it is installed and available.")
 
             logger.info(f"Initializing BGEM3FlagModel from path: {model_path}")
-            cuda_available = torch.cuda.is_available()
-            mps_available = torch.backends.mps.is_available()
-            use_fp16 = cuda_available or mps_available
-            self.model = None
-
-            if cuda_available:
-                try:
-                    logger.info("[VectorStore] CUDA detected — loading BGE-M3 with FP16 on CUDA.")
-                    self.model = BGEM3FlagModel(model_path, use_fp16=True)
-                    logger.info(f"BGEM3 model loaded successfully from path: {model_path} (device=cuda, fp16=True)")
-                except Exception as gpu_exc:
-                    logger.warning(f"[VectorStore] CUDA load failed ({gpu_exc}), trying MPS or CPU...")
-
-            if self.model is None and mps_available:
-                try:
-                    logger.info("[VectorStore] MPS detected — loading BGE-M3 with FP16 on MPS.")
-                    self.model = BGEM3FlagModel(model_path, use_fp16=True)
-                    logger.info(f"BGEM3 model loaded successfully from path: {model_path} (device=mps, fp16=True)")
-                except Exception as mps_exc:
-                    logger.warning(f"[VectorStore] MPS load failed ({mps_exc}), retrying on CPU (FP32)...")
-                    use_fp16 = False
-
-            if self.model is None:
-                logger.info("[VectorStore] Loading BGE-M3 with FP32 on CPU.")
-                self.model = BGEM3FlagModel(model_path, use_fp16=False)
-                logger.info(f"BGEM3 model loaded successfully from path: {model_path} (device=cpu, fp16=False)")
+            # BGEM3FlagModel auto-selects device (CUDA → MPS → CPU); overrides use_fp16=False on CPU
+            self.model = BGEM3FlagModel(model_path, use_fp16=True)
+            logger.info(f"BGEM3 model loaded from {model_path} (device={self.model.device})")
+            # MPS Metal compiler pre-allocates buffers for max_length; cap at 512 to avoid OOM
+            # (our chunks are ~256-500 tokens, so 512 is safe). Also use a small batch_size.
+            if self.model.device.type == "mps":
+                self._encode_kwargs = {"batch_size": 4, "max_length": 512}
+            else:
+                self._encode_kwargs = {}
 
         except Exception as e:
             logger.error(f"Error initializing embedding model: {str(e)}")
@@ -160,7 +143,7 @@ class BGEM3EmbeddingFunction(Embeddings):
                 return []
 
             if self.use_bgem3:
-                output = self.model.encode(valid_texts, return_dense=True, return_sparse=False)
+                output = self.model.encode(valid_texts, return_dense=True, return_sparse=False, **self._encode_kwargs)
                 dense_vecs = output.get("dense_vecs", [])
                 result = [vec.tolist() if hasattr(vec, 'tolist') else vec for vec in dense_vecs]
             else:
@@ -185,8 +168,8 @@ class BGEM3EmbeddingFunction(Embeddings):
                 return [], []
 
             if self.use_bgem3:
-                output = self.model.encode(valid_texts, return_dense=True, return_sparse=True)
-                
+                output = self.model.encode(valid_texts, return_dense=True, return_sparse=True, **self._encode_kwargs)
+
                 dense_vecs = output.get("dense_vecs", [])
                 lexical_weights = output.get("lexical_weights", [])
 
@@ -283,9 +266,13 @@ class VectorStoreService:
         if not hasattr(self, '_initialized'):
             self._initialized = True
 
+            self.collection_names: List[str] = []
+
             try:
                 # Initialize embedding model with the env-configured BGE-M3 path.
                 local_model_path = settings.BGE_M3_MODEL_PATH
+                if not os.path.isabs(local_model_path):
+                    local_model_path = os.path.join(str(settings.PROJECT_ROOT), local_model_path)
                 logger.info(f"Loading BGE-M3 model from: {local_model_path}")
 
                 # Check if BGE-M3 model exists, if not raise error
@@ -307,8 +294,6 @@ class VectorStoreService:
                 except Exception as e:
                     logger.error(f"Qdrant connection failed: {str(e)}")
                     raise
-
-                self.collection_names: List[str] = []
 
                 # BM25 retriever removed - using pure semantic search with LLM query expansion
                 # from .bm25_retriever import BM25RetrieverService

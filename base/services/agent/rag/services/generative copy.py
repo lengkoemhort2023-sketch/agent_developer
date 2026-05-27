@@ -393,15 +393,13 @@ class ResponseGenerationService:
 
             # Initialize Ollama connection manager
             self.ollama_manager = OllamaConnectionManager(settings.OLLAMA_MODEL)
-            from base.monitoring.langfuse_handler import get_langfuse_handler
-            _lf = get_langfuse_handler()
             self.llm = ChatOllama(
                 model=settings.OLLAMA_MODEL,
                 base_url=settings.OLLAMA_BASE_URL,
                 temperature=settings.OLLAMA_TEMPERATURE,
                 num_ctx=settings.OLLAMA_NUM_CTX,
                 num_predict=settings.OLLAMA_NUM_PREDICT,
-                callbacks=[_lf] if _lf else [],
+                keep_alive=-1,
             )
             logger.info(
                 f"Ollama LLM initialized successfully with model: {settings.OLLAMA_MODEL}, "
@@ -551,19 +549,41 @@ class ResponseGenerationService:
                 f"JSON array:"
             )
 
+            # keep_alive=-1 prevents model eviction between retrieval and this call.
+            # num_predict=1024: thinking models (gemma4) spend tokens on <think> blocks;
+            # 300 was too small — the model exhausted its budget inside <think> and
+            # produced no output. 1024 gives ~700 tokens of head-room after reasoning.
+            followup_llm = ChatOllama(
+                model=settings.OLLAMA_MODEL,
+                base_url=settings.OLLAMA_BASE_URL,
+                temperature=settings.OLLAMA_TEMPERATURE,
+                num_ctx=settings.OLLAMA_NUM_CTX,
+                num_predict=2048,
+                keep_alive=-1,
+                client_kwargs={"timeout": 90},
+            )
             logger.info(f"Generating {count} follow-up questions via LLM (lang={language})")
-            resp = self.llm.invoke([HumanMessage(content=prompt)])
-            resp_text = (resp.content or "").strip()
+            resp = followup_llm.invoke([HumanMessage(content=prompt)])
+            raw_resp_text = (resp.content or "").strip()
+            logger.info(f"Follow-up LLM raw output (before cleanup): {raw_resp_text[:300]}")
 
             # -- Parse LLM output ----------------------------------------------
             # Strip <think>...</think> blocks produced by reasoning/thinking models
-            resp_text = re.sub(r'<think>.*?</think>', '', resp_text, flags=re.DOTALL | re.IGNORECASE).strip()
+            resp_text = re.sub(r'<think>.*?</think>', '', raw_resp_text, flags=re.DOTALL | re.IGNORECASE).strip()
 
             # Strip markdown fences
             resp_text = re.sub(r'^```(?:json)?\s*', '', resp_text, flags=re.IGNORECASE)
             resp_text = re.sub(r'\s*```$', '', resp_text).strip()
 
-            logger.debug(f"Follow-up LLM raw output (after cleanup): {resp_text[:300]}")
+            # If stripping think blocks left nothing, the model put everything inside
+            # <think>. Try to salvage the last JSON array from inside the think block.
+            if not resp_text:
+                logger.info("Output empty after think-strip — searching inside <think> block")
+                think_match = re.search(r'<think>(.*?)</think>', raw_resp_text, re.DOTALL | re.IGNORECASE)
+                if think_match:
+                    resp_text = think_match.group(1).strip()
+
+            logger.info(f"Follow-up LLM output (after cleanup): {resp_text[:500]}")
 
             # JSON array parse find the LAST valid JSON array in the response
             # (using greedy search so we skip any partial arrays in preamble text)

@@ -29,7 +29,6 @@ class QueryPlan:
 
     #: One of the INTENT_TYPES below
     intent: str = "lookup"
-
     #: Additional focused queries derived from the original question.
     #: Non-empty only for "comparison" and "multi_hop" intents.
     sub_queries: List[str] = field(default_factory=list)
@@ -50,7 +49,7 @@ class QueryPlanner:
     """
     Analyzes a user question and produces a :class:`QueryPlan`.
 
-    Uses the configured LLM (gemma4:26b) to classify intent and generate
+    Uses the configured LLM (gemma4:e2b-mlx) to classify intent and generate
     sub-queries.  Falls back to a lightweight heuristic if the LLM fails or
     returns invalid JSON.
     """

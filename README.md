@@ -28,7 +28,7 @@ A **Django 5 + Django REST Framework** backend powering the DocBot enterprise in
 | Database | PostgreSQL (psycopg2) |
 | Vector DB | Qdrant 1.12 |
 | Cache / Queue | Redis + Celery |
-| LLM | Ollama (`gemma4:26b` — local) |
+| LLM | Ollama (`gemma4:e2b-mlx` — local) |
 | Embedding | BGE-M3 (FlagEmbedding) |
 | Reranker | BGE-Reranker-v2-m3 |
 | RAG Framework | LangChain + langchain-ollama |
@@ -43,7 +43,7 @@ A **Django 5 + Django REST Framework** backend powering the DocBot enterprise in
 ### Prerequisites
 
 - **Docker** and **Docker Compose**
-- **Ollama** running locally with `gemma4:26b` pulled
+- **Ollama** running locally with `gemma4:e2b-mlx` pulled
 - BGE-M3 model downloaded to `app/models/bge-m3/`
 - BGE-Reranker-v2-m3 downloaded to `app/models/bge-reranker-v2-m3/`
 
@@ -65,7 +65,7 @@ QDRANT_PORT=6333
 
 # Ollama LLM
 OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_MODEL=gemma4:26b
+OLLAMA_MODEL=gemma4:e2b-mlx
 
 # Model paths (inside container)
 BGE_M3_MODEL_PATH=/usr/src/app/models/bge-m3
@@ -295,7 +295,7 @@ agent_developer/
 | `QDRANT_HOST` | Qdrant host (default: `qdrant`) |
 | `QDRANT_PORT` | Qdrant port (default: `6333`) |
 | `OLLAMA_BASE_URL` | Ollama API base URL |
-| `OLLAMA_MODEL` | Model name (default: `gemma4:26b`) |
+| `OLLAMA_MODEL` | Model name (default: `gemma4:e2b-mlx`) |
 | `BGE_M3_MODEL_PATH` | Path to BGE-M3 model |
 | `RERANKER_MODEL_PATH` | Path to reranker model |
 
@@ -347,7 +347,7 @@ agent_developer/
 
 ## 🔄 Changing the LLM
 
-The default model is **`gemma4:26b`** via Ollama. To change:
+The default model is **`gemma4:e2b-mlx`** via Ollama. To change:
 
 1. Update `OLLAMA_MODEL` in `.env.dev`
 2. Pull the new model: `docker-compose exec ollama ollama pull <model-name>`

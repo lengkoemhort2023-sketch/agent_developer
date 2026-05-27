@@ -1,10 +1,13 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from django.utils import timezone
 
 from chat.models import ChatInput, ChatMessage, ChatSession
+
+logger = logging.getLogger("chat")
 
 
 def serialize_bot_response(bot_response: Any) -> str:
@@ -120,6 +123,13 @@ class AnswerUserQueryHandler:
             doc_id=doc_id,
         )
 
+        raw_suggestions = (
+            bot_response.get("suggestions", []) if isinstance(bot_response, dict) else []
+        )
+        logger.info(
+            f"[chat_queries] Saving message — suggestions count={len(raw_suggestions)}, "
+            f"values={raw_suggestions}"
+        )
         message = ChatMessage.objects.create(
             session=session,
             question=question,
@@ -127,9 +137,7 @@ class AnswerUserQueryHandler:
             document_references=bot_response.get("document_references", [])
             if isinstance(bot_response, dict)
             else [],
-            suggestions=bot_response.get("suggestions", [])
-            if isinstance(bot_response, dict)
-            else [],
+            suggestions=raw_suggestions,
         )
 
         chat_input.message = message

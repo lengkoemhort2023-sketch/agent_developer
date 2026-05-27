@@ -56,6 +56,9 @@ urlpatterns = [
     
     # Health check endpoint for Docker
     path('health/', lambda request: HttpResponse("OK", content_type="text/plain"), name='health_check'),
+
+    # Prometheus metrics endpoint — scraped by Prometheus at /metrics
+    path('', include('django_prometheus.urls')),
 ]
 
 # Serve media files in development with CORS headers

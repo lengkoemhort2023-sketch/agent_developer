@@ -1,0 +1,189 @@
+{
+  "title": "DocBot System Monitor",
+  "uid": "docbot-monitor",
+  "schemaVersion": 38,
+  "version": 2,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["docbot"],
+  "panels": [
+
+    { "id": 100, "title": "Django API", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false },
+
+    {
+      "id": 1, "title": "HTTP Request Rate", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(django_http_requests_total_by_method_total[5m])) by (method)", "legendFormat": "{{method}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 2, "title": "HTTP Latency (P50 / P95 / P99)", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(django_http_requests_latency_seconds_by_view_method_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(django_http_requests_latency_seconds_by_view_method_bucket[5m])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(django_http_requests_latency_seconds_by_view_method_bucket[5m])) by (le))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 3, "title": "HTTP Error Rate (4xx / 5xx)", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(django_http_responses_total_by_status_view_method_total{status=~\"4..\"}[5m]))", "legendFormat": "4xx" },
+        { "expr": "sum(rate(django_http_responses_total_by_status_view_method_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+    },
+
+    { "id": 101, "title": "RAG Pipeline", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }, "collapsed": false },
+
+    {
+      "id": 4, "title": "RAG Request Rate", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(rag_requests_total[5m])) by (language, status)", "legendFormat": "{{language}} / {{status}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 5, "title": "RAG Pipeline Latency (P50 / P95)", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(rag_request_duration_seconds_bucket[5m])) by (le, language))", "legendFormat": "p50 {{language}}" },
+        { "expr": "histogram_quantile(0.95, sum(rate(rag_request_duration_seconds_bucket[5m])) by (le, language))", "legendFormat": "p95 {{language}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 6, "title": "RAG Confidence Score (median / P10)", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(rag_confidence_score_bucket[5m])) by (le, language))", "legendFormat": "median {{language}}" },
+        { "expr": "histogram_quantile(0.10, sum(rate(rag_confidence_score_bucket[5m])) by (le, language))", "legendFormat": "p10 {{language}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 } }
+    },
+
+    { "id": 102, "title": "Celery Workers", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }, "collapsed": false },
+
+    {
+      "id": 7, "title": "Active Celery Tasks", "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(celery_active_tasks)", "legendFormat": "Active" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] } } }
+    },
+    {
+      "id": 8, "title": "Celery Task Rate by State", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 20, "x": 4, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(celery_tasks_total[5m])) by (state)", "legendFormat": "{{state}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+    },
+
+    { "id": 103, "title": "System Resources", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 }, "collapsed": false },
+
+    {
+      "id": 9, "title": "CPU Usage", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m]))", "legendFormat": "CPU %" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] }, "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 13, "title": "Memory Usage", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "RAM %" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "red", "value": 0.9 }] }, "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 14, "title": "GPU Utilization (RTX 5090 — prod only)", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "DCGM_FI_DEV_GPU_UTIL", "legendFormat": "GPU {{gpu}} util %" },
+        { "expr": "DCGM_FI_DEV_MEM_COPY_UTIL", "legendFormat": "GPU {{gpu}} mem %" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }, "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 15, "title": "GPU Power & Temperature (RTX 5090 — prod only)", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "DCGM_FI_DEV_POWER_USAGE", "legendFormat": "Power (W) GPU {{gpu}}" },
+        { "expr": "DCGM_FI_DEV_GPU_TEMP", "legendFormat": "Temp (°C) GPU {{gpu}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 } } }
+    },
+
+    { "id": 104, "title": "Logs (Loki)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 }, "collapsed": false },
+
+    {
+      "id": 16, "title": "Application Logs", "type": "logs",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 45 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service=\"docbot-api\"}", "legendFormat": "" }],
+      "options": { "showTime": true, "showLabels": true, "sortOrder": "Descending", "wrapLogMessage": true, "dedupStrategy": "none" }
+    },
+    {
+      "id": 17, "title": "Error Logs", "type": "logs",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 45 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service=\"docbot-api\", level=\"ERROR\"}", "legendFormat": "" }],
+      "options": { "showTime": true, "showLabels": true, "sortOrder": "Descending", "wrapLogMessage": true }
+    },
+    {
+      "id": 18, "title": "Log Volume by Level", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 55 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "sum(rate({service=\"docbot-api\"}[5m])) by (level)", "legendFormat": "{{level}}" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 19, "title": "RAG Pipeline Logs", "type": "logs",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 55 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service=\"docbot-api\", logger=~\"base.services.*\"}", "legendFormat": "" }],
+      "options": { "showTime": true, "showLabels": false, "sortOrder": "Descending", "wrapLogMessage": true }
+    },
+
+    { "id": 105, "title": "Traces (Tempo)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 63 }, "collapsed": false },
+
+    {
+      "id": 20, "title": "Service Map", "type": "nodeGraph",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 64 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [{ "queryType": "serviceMap" }]
+    },
+    {
+      "id": 21, "title": "Trace Search — RAG Pipeline", "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 64 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [{
+        "queryType": "traceql",
+        "query": "{resource.service.name=\"docbot-api\" && name=~\"rag.*\"}",
+        "tableType": "spans"
+      }],
+      "transformations": [{ "id": "organize", "options": { "excludeByName": {}, "renameByName": {} } }]
+    },
+    {
+      "id": 22, "title": "Slow Traces (>5s)", "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 74 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [{
+        "queryType": "traceql",
+        "query": "{resource.service.name=\"docbot-api\" && duration>5s}",
+        "tableType": "traces"
+      }]
+    }
+
+  ]
+}

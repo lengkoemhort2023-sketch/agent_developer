@@ -27,10 +27,13 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
+from base.tracing import get_tracer
+
 from .planner import QueryPlan
 from .tools import RAGTools
 
 logger = logging.getLogger(__name__)
+_tracer = get_tracer("docbot.rag.retriever")
 
 
 class AgenticRetriever:
@@ -75,57 +78,69 @@ class AgenticRetriever:
             filters["source"] = str(doc_id)
             logger.info(f"[Retriever] doc_id mention active – restricting search to source={doc_id}")
 
-        # ── Pass A: broad search ──────────────────────────────────────────────
-        logger.info(f"[Retriever] Pass A  top_k={TOP_K_BROAD}")
-        pass_a = self.tools.hybrid_search(
-            query=question,
-            top_k=TOP_K_BROAD,
-            collection_name=collection_name,
-            filters=filters,
-        )
-        logger.info(f"[Retriever] Pass A  → {len(pass_a)} chunks")
+        with _tracer.start_as_current_span("rag.retrieve") as span:
+            span.set_attribute("rag.collection", collection_name or "all")
+            span.set_attribute("rag.sub_queries", len(plan.sub_queries))
 
-        # ── Pass B: sub-query expansion ───────────────────────────────────────
-        pass_b: List[dict] = []
-        if plan.sub_queries:
-            logger.info(
-                f"[Retriever] Pass B  {len(plan.sub_queries)} sub-queries "
-                f"top_k={TOP_K_SUBQUERY} each"
-            )
-            for sq in plan.sub_queries:
-                sq_chunks = self.tools.hybrid_search(
-                    query=sq,
-                    top_k=TOP_K_SUBQUERY,
+            # ── Pass A: broad search ──────────────────────────────────────────
+            logger.info(f"[Retriever] Pass A  top_k={TOP_K_BROAD}")
+            with _tracer.start_as_current_span("rag.retrieve.pass_a") as pa_span:
+                pass_a = self.tools.hybrid_search(
+                    query=question,
+                    top_k=TOP_K_BROAD,
                     collection_name=collection_name,
                     filters=filters,
                 )
+                pa_span.set_attribute("rag.pass_a.chunks", len(pass_a))
+            logger.info(f"[Retriever] Pass A  → {len(pass_a)} chunks")
+
+            # ── Pass B: sub-query expansion ───────────────────────────────────
+            pass_b: List[dict] = []
+            if plan.sub_queries:
                 logger.info(
-                    f"[Retriever] Pass B  sub-query='{sq[:60]}' → {len(sq_chunks)} chunks"
+                    f"[Retriever] Pass B  {len(plan.sub_queries)} sub-queries "
+                    f"top_k={TOP_K_SUBQUERY} each"
                 )
-                pass_b.extend(sq_chunks)
+                with _tracer.start_as_current_span("rag.retrieve.pass_b") as pb_span:
+                    for sq in plan.sub_queries:
+                        sq_chunks = self.tools.hybrid_search(
+                            query=sq,
+                            top_k=TOP_K_SUBQUERY,
+                            collection_name=collection_name,
+                            filters=filters,
+                        )
+                        logger.info(
+                            f"[Retriever] Pass B  sub-query='{sq[:60]}' → {len(sq_chunks)} chunks"
+                        )
+                        pass_b.extend(sq_chunks)
+                    pb_span.set_attribute("rag.pass_b.chunks", len(pass_b))
 
-        # ── Merge + deduplicate ───────────────────────────────────────────────
-        all_chunks = self._merge_dedup(pass_a, pass_b)
-        logger.info(f"[Retriever] After merge+dedup: {len(all_chunks)} unique chunks")
+            # ── Merge + deduplicate ───────────────────────────────────────────
+            all_chunks = self._merge_dedup(pass_a, pass_b)
+            logger.info(f"[Retriever] After merge+dedup: {len(all_chunks)} unique chunks")
+            span.set_attribute("rag.merged_chunks", len(all_chunks))
 
-        if not all_chunks:
-            return []
+            if not all_chunks:
+                return []
 
-        # ── Pass C: rerank + prune ────────────────────────────────────────────
-        logger.info(f"[Retriever] Pass C  rerank → keep top {TOP_K_RERANK}")
-        reranked = self.tools.rerank(question, all_chunks)
-        top_chunks = reranked[:TOP_K_RERANK]
+            # ── Pass C: rerank + prune ────────────────────────────────────────
+            logger.info(f"[Retriever] Pass C  rerank → keep top {TOP_K_RERANK}")
+            with _tracer.start_as_current_span("rag.retrieve.pass_c_rerank") as pc_span:
+                reranked = self.tools.rerank(question, all_chunks)
+                top_chunks = reranked[:TOP_K_RERANK]
+                pc_span.set_attribute("rag.pass_c.chunks", len(top_chunks))
 
-        if top_chunks:
-            logger.info(
-                f"[Retriever] Final: {len(top_chunks)} chunks  "
-                f"top_rerank={top_chunks[0].get('_rerank_score', 0):.4f}  "
-                f"top_rrf={top_chunks[0].get('score', 0):.5f}"
-            )
-        else:
-            logger.warning("[Retriever] Final: 0 chunks after reranking")
+            if top_chunks:
+                logger.info(
+                    f"[Retriever] Final: {len(top_chunks)} chunks  "
+                    f"top_rerank={top_chunks[0].get('_rerank_score', 0):.4f}  "
+                    f"top_rrf={top_chunks[0].get('score', 0):.5f}"
+                )
+            else:
+                logger.warning("[Retriever] Final: 0 chunks after reranking")
 
-        return top_chunks
+            span.set_attribute("rag.final_chunks", len(top_chunks))
+            return top_chunks
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Django app — runs natively in dev (host), in container in production
+  - job_name: django
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:8000   # dev: Django running natively on host
+        labels:
+          env: dev
+
+  # Celery worker events via celery-exporter sidecar
+  - job_name: celery
+    static_configs:
+      - targets:
+          - celery-exporter:9808
+
+  # OS-level metrics: CPU, RAM, disk, network
+  - job_name: node
+    static_configs:
+      - targets:
+          - node-exporter:9100

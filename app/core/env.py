@@ -3,8 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
+try:
+    from dotenv import load_dotenv  # type: ignore
+except ImportError:
+    def load_dotenv(path, override=False):
+        return False
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +29,7 @@ def load_environment() -> Path | None:
 
     candidates.extend(
         [
-            PROJECT_ROOT / ".env.local",
+            PROJECT_ROOT / ".env.dev",
             PROJECT_ROOT / ".env",
         ]
     )

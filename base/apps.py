@@ -22,6 +22,23 @@ class BaseConfig(AppConfig):
     def ready(self):
         import base.admins
 
+        # OpenTelemetry — initialise tracing and auto-instrument Django internals.
+        # Safe to call when OTel packages are absent (all errors are caught inside).
+        from base.tracing import setup_tracing
+        setup_tracing()
+
+        try:
+            from opentelemetry.instrumentation.django import DjangoInstrumentor
+            from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+            from opentelemetry.instrumentation.redis import RedisInstrumentor
+            from opentelemetry.instrumentation.celery import CeleryInstrumentor
+            DjangoInstrumentor().instrument()
+            Psycopg2Instrumentor().instrument()
+            RedisInstrumentor().instrument()
+            CeleryInstrumentor().instrument()
+        except ImportError:
+            pass
+
         post_migrate.connect(
             bootstrap_default_groups,
             dispatch_uid="base.bootstrap_default_groups",
