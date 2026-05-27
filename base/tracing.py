@@ -19,7 +19,7 @@ def setup_tracing() -> None:
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         resource = Resource.create({
-            SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", "docbot-api"),
+            SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", "amk-agent"),
         })
         provider = TracerProvider(resource=resource)
         provider.add_span_processor(

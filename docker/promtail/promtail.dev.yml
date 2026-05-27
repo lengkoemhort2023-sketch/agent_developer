@@ -18,7 +18,7 @@ scrape_configs:
         labels:
           job: django
           env: dev
-          service: docbot-api
+          service: amk-agent
           __path__: /logs/app.log
     pipeline_stages:
       - json:

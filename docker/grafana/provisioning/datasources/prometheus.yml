@@ -39,9 +39,5 @@ datasources:
         tags:
           - key: service.name
             value: service
-      serviceMap:
-        datasourceUid: prometheus
-      nodeGraph:
-        enabled: true
       lokiSearch:
         datasourceUid: loki

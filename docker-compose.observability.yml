@@ -6,6 +6,24 @@ name: agent_developer_observability
 
 services:
   # ============================================================================
+  # OPENTELEMETRY COLLECTOR - Receives OTLP traces & metrics, routes to backends
+  # ============================================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "5317:4317"  # OTLP gRPC — Django sends traces & metrics here
+      - "5318:4318"  # OTLP HTTP
+      - "8889:8889"  # Prometheus exporter (scraped by Prometheus)
+    volumes:
+      - ./docker/otel-collector/config.yml:/etc/otel-collector/config.yml:ro
+    command: --config=/etc/otel-collector/config.yml
+    depends_on:
+      - tempo
+    restart: unless-stopped
+    networks:
+      - net
+
+  # ============================================================================
   # PROMETHEUS - Metrics Collection
   # ============================================================================
   prometheus:

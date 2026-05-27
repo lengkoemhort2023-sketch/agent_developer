@@ -30,7 +30,7 @@ def get_langfuse_handler():
         _handler = CallbackHandler(
             public_key=public_key,
             secret_key=secret_key,
-            host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+            host=os.environ.get("LANGFUSE_HOST", "http://localhost:3002"),
         )
         logger.info("[Langfuse] LLM observability initialised (host=%s)",
                     os.environ.get("LANGFUSE_HOST", "cloud.langfuse.com"))

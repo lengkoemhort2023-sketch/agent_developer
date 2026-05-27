@@ -125,7 +125,6 @@ INSTALLED_APPS = [
     'django_prometheus',
     'django_celery_results',
     'django_celery_beat',
-    'django_prometheus',
     'user.apps.UserConfig',
     'rest_framework_simplejwt.token_blacklist',
     'base',
@@ -157,7 +156,6 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     'app.core.middleware.RequestIDMiddleware',
     'app.core.middleware.APIMetricsMiddleware',
-    'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'base.middleware.TraceIDMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -329,8 +327,11 @@ STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.AppDirectoriesFinder",
 ]
 
-# WhiteNoise configuration for serving static files in production
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+# WhiteNoise configuration for serving static files
+if DEBUG:
+    STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
+else:
+    STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 MEDIA_URL = os.environ.get("MEDIA_URL", "")
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", ""))
@@ -480,7 +481,10 @@ from app.core.observability import observability
 observability.initialize(globals())
 
 # Prometheus metrics endpoint configuration
-PROMETHEUS_METRICS_EXPORT_PORT = env_int("PROMETHEUS_METRICS_EXPORT_PORT", 8000)
+# Disabled — we use the URL exporter at /api/metrics/ instead.
+# The thread-based exporter conflicts with Django's autoreloader
+# and causes "Address already in use" errors on restart.
+PROMETHEUS_METRICS_EXPORT_PORT = 0
 
 # OpenTelemetry configuration
 OTEL_ENABLED = env_bool("OTEL_ENABLED", True)
@@ -488,22 +492,18 @@ OTEL_METRICS_ENABLED = env_bool("OTEL_METRICS_ENABLED", True)
 OTEL_SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "amk-agent")
 OTEL_SERVICE_VERSION = os.environ.get("OTEL_SERVICE_VERSION", "1.0.0")
 OTEL_ENVIRONMENT = os.environ.get("OTEL_ENVIRONMENT", "development")
-OTEL_EXPORTER_OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo:4317")
+OTEL_EXPORTER_OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:5317")
 
 # Langfuse configuration (for LLM observability)
 LANGFUSE_ENABLED = env_bool("LANGFUSE_ENABLED", False)
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
-LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "http://localhost:3000")
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "http://localhost:3002")
 
 # Loki logging configuration
 LOKI_ENABLED = env_bool("LOKI_ENABLED", True)
-LOKI_ENDPOINT = os.environ.get("LOKI_ENDPOINT", "http://loki:3100")
+LOKI_ENDPOINT = os.environ.get("LOKI_ENDPOINT", "http://localhost:3100")
 
-# Django-Prometheus configuration
-# Disable automatic thread-based exporter (we use URL exporter instead at /api/metrics/)
-# This prevents conflicts with Django's autoreloader in development
-PROMETHEUS_EXPORT_MIGRATIONS = env_bool("PROMETHEUS_EXPORT_MIGRATIONS", True)
-if os.environ.get("RUN_MAIN") == "true":
-    # In autoreloader child process - disable thread exporter
-    os.environ["PROMETHEUS_DISABLE_THREAD_EXPORTER"] = "1"
+# Django-Prometheus — disable migration export to avoid DB-requiring
+# queries during AppConfig.ready() when the database may not be up.
+PROMETHEUS_EXPORT_MIGRATIONS = False

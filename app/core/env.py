@@ -32,7 +32,7 @@ def load_environment() -> Path | None:
             PROJECT_ROOT / ".env.dev",
             PROJECT_ROOT / ".env",
         ]
-    )
+    )   
 
     for candidate in candidates:
         if candidate.exists():

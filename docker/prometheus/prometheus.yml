@@ -18,8 +18,22 @@ scrape_configs:
       - targets:
           - celery-exporter:9808
 
-  # OS-level metrics: CPU, RAM, disk, network
+  # OpenTelemetry Collector — OTLP metrics converted to Prometheus format
+  - job_name: otel-collector
+    static_configs:
+      - targets:
+          - otel-collector:8889
+
+  # OS-level metrics: CPU, RAM (from Docker node-exporter, limited on macOS)
   - job_name: node
     static_configs:
       - targets:
           - node-exporter:9100
+
+  # macOS host disk usage (runs natively — can't get this from inside Docker)
+  - job_name: host
+    static_configs:
+      - targets:
+          - host.docker.internal:9101
+        labels:
+          env: dev

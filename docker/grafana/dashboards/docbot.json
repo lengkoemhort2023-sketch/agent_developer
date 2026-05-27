@@ -15,7 +15,7 @@
       "id": 1, "title": "HTTP Request Rate", "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(rate(django_http_requests_total_by_method_total[5m])) by (method)", "legendFormat": "{{method}}" }],
+      "targets": [{ "expr": "sum(rate(api_requests_total[5m])) by (method)", "legendFormat": "{{method}}" }],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
     },
     {
@@ -23,9 +23,9 @@
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum(rate(django_http_requests_latency_seconds_by_view_method_bucket[5m])) by (le))", "legendFormat": "p50" },
-        { "expr": "histogram_quantile(0.95, sum(rate(django_http_requests_latency_seconds_by_view_method_bucket[5m])) by (le))", "legendFormat": "p95" },
-        { "expr": "histogram_quantile(0.99, sum(rate(django_http_requests_latency_seconds_by_view_method_bucket[5m])) by (le))", "legendFormat": "p99" }
+        { "expr": "histogram_quantile(0.50, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99" }
       ],
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
     },
@@ -34,8 +34,8 @@
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "sum(rate(django_http_responses_total_by_status_view_method_total{status=~\"4..\"}[5m]))", "legendFormat": "4xx" },
-        { "expr": "sum(rate(django_http_responses_total_by_status_view_method_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx" }
+        { "expr": "sum(rate(api_requests_total{status=~\"4..\"}[5m]))", "legendFormat": "4xx" },
+        { "expr": "sum(rate(api_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx" }
       ],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
     },
@@ -46,7 +46,7 @@
       "id": 4, "title": "RAG Request Rate", "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(rate(rag_requests_total[5m])) by (language, status)", "legendFormat": "{{language}} / {{status}}" }],
+      "targets": [{ "expr": "sum(rate(rag_retrievals_total[5m])) by (retriever_type, status)", "legendFormat": "{{retriever_type}} / {{status}}" }],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
     },
     {
@@ -54,58 +54,96 @@
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum(rate(rag_request_duration_seconds_bucket[5m])) by (le, language))", "legendFormat": "p50 {{language}}" },
-        { "expr": "histogram_quantile(0.95, sum(rate(rag_request_duration_seconds_bucket[5m])) by (le, language))", "legendFormat": "p95 {{language}}" }
+        { "expr": "histogram_quantile(0.50, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" }
       ],
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
     },
     {
-      "id": 6, "title": "RAG Confidence Score (median / P10)", "type": "timeseries",
+      "id": 6, "title": "RAG Duration Breakdown", "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum(rate(rag_confidence_score_bucket[5m])) by (le, language))", "legendFormat": "median {{language}}" },
-        { "expr": "histogram_quantile(0.10, sum(rate(rag_confidence_score_bucket[5m])) by (le, language))", "legendFormat": "p10 {{language}}" }
+        { "expr": "rate(rag_retrieval_duration_seconds_sum[5m]) / rate(rag_retrieval_duration_seconds_count[5m])", "legendFormat": "avg retrieval" },
+        { "expr": "rate(rag_llm_duration_seconds_sum[5m]) / rate(rag_llm_duration_seconds_count[5m])", "legendFormat": "avg LLM" }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 } }
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
     },
 
-    { "id": 102, "title": "Celery Workers", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }, "collapsed": false },
+    { "id": 106, "title": "User & Chat Activity", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }, "collapsed": false },
+
+    {
+      "id": 23, "title": "Daily Active Users", "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "increase(user_requests_total{authenticated=\"true\"}[24h])", "legendFormat": "users" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }] } } }
+    },
+    {
+      "id": 24, "title": "Daily Chat Sessions", "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "increase(chat_sessions_total[24h])", "legendFormat": "sessions" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 20 }, { "color": "red", "value": 50 }] } } }
+    },
+    {
+      "id": 25, "title": "Daily Messages", "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "increase(chat_messages_total[24h])", "legendFormat": "messages" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] } } }
+    },
+    {
+      "id": 26, "title": "Response Timing Breakdown", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(rag_embed_duration_seconds_sum[5m]) / rate(rag_embed_duration_seconds_count[5m])", "legendFormat": "embed" },
+        { "expr": "rate(rag_retrieval_duration_seconds_sum[5m]) / rate(rag_retrieval_duration_seconds_count[5m])", "legendFormat": "retrieval" },
+        { "expr": "rate(rag_process_duration_seconds_sum[5m]) / rate(rag_process_duration_seconds_count[5m])", "legendFormat": "process" },
+        { "expr": "rate(rag_followup_duration_seconds_sum[5m]) / rate(rag_followup_duration_seconds_count[5m])", "legendFormat": "followup_llm" },
+        { "expr": "rate(rag_total_duration_seconds_sum[5m]) / rate(rag_total_duration_seconds_count[5m])", "legendFormat": "total" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 20 }] } } }
+    },
+
+    { "id": 102, "title": "Celery Workers", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }, "collapsed": false },
 
     {
       "id": 7, "title": "Active Celery Tasks", "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 19 },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(celery_active_tasks)", "legendFormat": "Active" }],
+      "targets": [{ "expr": "sum(celery_worker_tasks_active)", "legendFormat": "Active" }],
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] } } }
     },
     {
       "id": 8, "title": "Celery Task Rate by State", "type": "timeseries",
-      "gridPos": { "h": 8, "w": 20, "x": 4, "y": 19 },
+      "gridPos": { "h": 8, "w": 20, "x": 4, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(rate(celery_tasks_total[5m])) by (state)", "legendFormat": "{{state}}" }],
+      "targets": [{ "expr": "sum(rate(celery_task_succeeded_total[5m])) by (task_name)", "legendFormat": "succeeded: {{task_name}}" },
+        { "expr": "sum(rate(celery_task_failed_total[5m])) by (task_name)", "legendFormat": "failed: {{task_name}}" }],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
     },
 
-    { "id": 103, "title": "System Resources", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 }, "collapsed": false },
+    { "id": 103, "title": "System Resources", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 }, "collapsed": false },
 
     {
       "id": 9, "title": "CPU Usage", "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m]))", "legendFormat": "CPU %" }],
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] }, "custom": { "lineWidth": 2 } } }
     },
     {
       "id": 13, "title": "Memory Usage", "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "RAM %" }],
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "red", "value": 0.9 }] }, "custom": { "lineWidth": 2 } } }
     },
     {
       "id": 14, "title": "GPU Utilization (RTX 5090 — prod only)", "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "expr": "DCGM_FI_DEV_GPU_UTIL", "legendFormat": "GPU {{gpu}} util %" },
@@ -115,7 +153,7 @@
     },
     {
       "id": 15, "title": "GPU Power & Temperature (RTX 5090 — prod only)", "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "expr": "DCGM_FI_DEV_POWER_USAGE", "legendFormat": "Power (W) GPU {{gpu}}" },
@@ -123,64 +161,71 @@
       ],
       "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 } } }
     },
+    {
+      "id": 27, "title": "Disk Usage", "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "host_disk_usage_percent{env=\"dev\"}", "legendFormat": "{{mountpoint}}" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 }] }, "custom": { "lineWidth": 2 } } }
+    },
 
-    { "id": 104, "title": "Logs (Loki)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 }, "collapsed": false },
+    { "id": 104, "title": "Logs (Loki)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }, "collapsed": false },
 
     {
       "id": 16, "title": "Application Logs", "type": "logs",
-      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 45 },
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 58 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service=\"docbot-api\"}", "legendFormat": "" }],
+      "targets": [{ "expr": "{service=\"amk-agent\"}", "legendFormat": "" }],
       "options": { "showTime": true, "showLabels": true, "sortOrder": "Descending", "wrapLogMessage": true, "dedupStrategy": "none" }
     },
     {
       "id": 17, "title": "Error Logs", "type": "logs",
-      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 45 },
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 58 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service=\"docbot-api\", level=\"ERROR\"}", "legendFormat": "" }],
+      "targets": [{ "expr": "{service=\"amk-agent\", level=\"ERROR\"}", "legendFormat": "" }],
       "options": { "showTime": true, "showLabels": true, "sortOrder": "Descending", "wrapLogMessage": true }
     },
     {
       "id": 18, "title": "Log Volume by Level", "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 55 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "sum(rate({service=\"docbot-api\"}[5m])) by (level)", "legendFormat": "{{level}}" }],
+      "targets": [{ "expr": "sum(rate({service=\"amk-agent\"}[5m])) by (level)", "legendFormat": "{{level}}" }],
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } }
     },
     {
       "id": 19, "title": "RAG Pipeline Logs", "type": "logs",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 55 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 68 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service=\"docbot-api\", logger=~\"base.services.*\"}", "legendFormat": "" }],
+      "targets": [{ "expr": "{service=\"amk-agent\", logger=~\"base.services.*\"}", "legendFormat": "" }],
       "options": { "showTime": true, "showLabels": false, "sortOrder": "Descending", "wrapLogMessage": true }
     },
 
-    { "id": 105, "title": "Traces (Tempo)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 63 }, "collapsed": false },
+    { "id": 105, "title": "Traces (Tempo)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 76 }, "collapsed": false },
 
     {
       "id": 20, "title": "Service Map", "type": "nodeGraph",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 64 },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 77 },
       "datasource": { "type": "tempo", "uid": "tempo" },
       "targets": [{ "queryType": "serviceMap" }]
     },
     {
       "id": 21, "title": "Trace Search — RAG Pipeline", "type": "table",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 64 },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 77 },
       "datasource": { "type": "tempo", "uid": "tempo" },
       "targets": [{
         "queryType": "traceql",
-        "query": "{resource.service.name=\"docbot-api\" && name=~\"rag.*\"}",
+        "query": "{resource.service.name=\"amk-agent\" && name=~\"rag.*\"}",
         "tableType": "spans"
       }],
       "transformations": [{ "id": "organize", "options": { "excludeByName": {}, "renameByName": {} } }]
     },
     {
       "id": 22, "title": "Slow Traces (>5s)", "type": "table",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 74 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 87 },
       "datasource": { "type": "tempo", "uid": "tempo" },
       "targets": [{
         "queryType": "traceql",
-        "query": "{resource.service.name=\"docbot-api\" && duration>5s}",
+        "query": "{resource.service.name=\"amk-agent\" && duration>5s}",
         "tableType": "traces"
       }]
     }

@@ -73,6 +73,11 @@ class APIMetricsMiddleware(MiddlewareMixin):
                         endpoint=endpoint
                     ).observe(duration)
                     
+                    # Track user activity
+                    metrics["user_requests"].labels(
+                        authenticated=str(request.user.is_authenticated)
+                    ).inc()
+                    
                     # Record errors
                     if status >= 400:
                         error_type = "client_error" if status < 500 else "server_error"

@@ -22,6 +22,7 @@ import json
 from typing import List, Dict, Any, Optional
 import re
 import psutil
+from app.core.observability import observability
 
 
 def cleanup_bold_colon(text: str) -> str:
@@ -3065,6 +3066,19 @@ Snippet:
                         followup_t = _t.get('followup_llm', _t.get('process', _t['start'])) - _t.get('process', _t['start'])
                         other_t = _t['total'] - _t['start'] - embed_t - retrieval_t - process_t - followup_t
                         logger.info(f"[TIMING] embed={embed_t:.2f}s | retrieval={retrieval_t:.2f}s | process={process_t:.2f}s | followup_llm={followup_t:.2f}s | other={other_t:.2f}s | total={_t['total']-_t['start']:.2f}s")
+
+                        # Report phase durations to Prometheus
+                        metrics = observability.metrics
+                        if metrics:
+                            if _t.get('embed'):
+                                metrics["rag_embed_duration"].observe(embed_t)
+                            if _t.get('retrieval'):
+                                metrics["rag_retrieval_duration"].labels(retriever_type="agentic" if self.agentic_rag else "classic").observe(retrieval_t)
+                            if _t.get('process'):
+                                metrics["rag_process_duration"].observe(process_t)
+                            if _t.get('followup_llm'):
+                                metrics["rag_followup_duration"].observe(followup_t)
+                            metrics["rag_total_duration"].observe(_t['total'] - _t['start'])
 
                         # Prepare final response payload
                         if simplified_output:

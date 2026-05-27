@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 from django.utils import timezone
 
 from chat.models import ChatInput, ChatMessage, ChatSession
+from app.core.observability import observability
 
 logger = logging.getLogger("chat")
 
@@ -108,6 +109,11 @@ class AnswerUserQueryHandler:
             missing_session_policy=missing_session_policy,
         )
 
+        if created_session:
+            metrics = observability.metrics
+            if metrics:
+                metrics["chat_sessions"].inc()
+
         chat_input = ChatInput.objects.create(
             user=user,
             input_type=input_type,
@@ -139,6 +145,10 @@ class AnswerUserQueryHandler:
             else [],
             suggestions=raw_suggestions,
         )
+
+        metrics = observability.metrics
+        if metrics:
+            metrics["chat_messages"].inc()
 
         chat_input.message = message
         chat_input.processed_at = timezone.now()

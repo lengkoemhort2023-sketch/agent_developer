@@ -123,6 +123,51 @@ def init_prometheus_metrics():
         ["retriever_type", "status"],
         registry=REGISTRY
     )
+
+    # Per-phase RAG timing histograms
+    rag_embed_duration = Histogram(
+        "rag_embed_duration_seconds",
+        "Embedding generation latency",
+        [],
+        buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0],
+        registry=REGISTRY
+    )
+
+    rag_process_duration = Histogram(
+        "rag_process_duration_seconds",
+        "Response processing (chunk extraction, doc ref build) latency",
+        [],
+        buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0],
+        registry=REGISTRY
+    )
+
+    rag_followup_duration = Histogram(
+        "rag_followup_duration_seconds",
+        "Follow-up question generation latency",
+        [],
+        buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 20.0],
+        registry=REGISTRY
+    )
+
+    # User & chat activity metrics
+    user_requests = Counter(
+        "user_requests_total",
+        "Total authenticated user requests",
+        ["authenticated"],
+        registry=REGISTRY
+    )
+
+    chat_sessions = Counter(
+        "chat_sessions_total",
+        "Total chat sessions created",
+        registry=REGISTRY
+    )
+
+    chat_messages = Counter(
+        "chat_messages_total",
+        "Total chat messages sent",
+        registry=REGISTRY
+    )
     
     # Database metrics
     db_query_duration = Histogram(
@@ -163,6 +208,12 @@ def init_prometheus_metrics():
         "rag_llm_duration": rag_llm_duration,
         "rag_total_duration": rag_total_duration,
         "rag_retrieval_count": rag_retrieval_count,
+        "rag_embed_duration": rag_embed_duration,
+        "rag_process_duration": rag_process_duration,
+        "rag_followup_duration": rag_followup_duration,
+        "user_requests": user_requests,
+        "chat_sessions": chat_sessions,
+        "chat_messages": chat_messages,
         "db_query_duration": db_query_duration,
         "db_connection_pool": db_connection_pool,
         "celery_task_duration": celery_task_duration,
@@ -185,10 +236,10 @@ def init_otel_tracing():
     })
     
     # Setup OTLP exporter for Tempo
-    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo:4317")
+    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:5317")
     
     try:
-        trace_exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
+        trace_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
         tracer_provider = TracerProvider(resource=resource)
         tracer_provider.add_span_processor(BatchSpanProcessor(trace_exporter))
         trace.set_tracer_provider(tracer_provider)
@@ -211,11 +262,11 @@ def init_otel_metrics():
     if not otel_metrics_enabled:
         return None
     
-    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo:4317")
+    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:5317")
     
     try:
         metric_reader = PeriodicExportingMetricReader(
-            OTLPMetricExporter(endpoint=otlp_endpoint)
+            OTLPMetricExporter(endpoint=otlp_endpoint, insecure=True)
         )
         meter_provider = MeterProvider(metric_readers=[metric_reader])
         metrics.set_meter_provider(meter_provider)
@@ -238,7 +289,7 @@ def init_langfuse(enabled: bool = True):
         langfuse = Langfuse(
             public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
             secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
-            host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
+            host=os.environ.get("LANGFUSE_HOST", "http://localhost:3002"),
         )
         
         return langfuse
