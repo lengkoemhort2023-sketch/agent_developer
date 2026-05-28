@@ -1,7 +1,9 @@
 from celery import shared_task
+from langfuse.decorators import observe
 from chat.utils import ask_question
 
 @shared_task(bind=True)
+@observe(name="celery.generate_response", capture_input=True)
 def generate_response_task(self, question, file_type=None, user_token=None, session_id=None):
     """Celery task wrapper around the synchronous ask_question flow.
 

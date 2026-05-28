@@ -1,10 +1,12 @@
 from base.services.audio.setup import allowed_file, audio_prompt_response
 from django.http import JsonResponse
 import os
+from langfuse.decorators import observe
 from base.services.agent.rag.providers import RagProviders
 from base.services.agent.rag.queue_manager import enqueue_query, get_query_queue, get_query_result
 
 
+@observe(capture_input=True, capture_output=True)
 def ask_question(question, file_type=None, user_token=None, session_id=None, doc_id=None, async_processing=False, priority=5):
     """
     Process a question through the RAG pipeline.

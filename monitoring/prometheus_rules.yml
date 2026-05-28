@@ -1,0 +1,178 @@
+groups:
+  - name: api_alerts
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(api_errors_total{error_type="server_error"}[5m])) /
+          sum(rate(api_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx error rate above 5%"
+          description: "Server error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: HighAPILatencyP95
+        expr: |
+          histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket[5m])) by (le, endpoint))
+          > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency above 3s on {{ $labels.endpoint }}"
+          description: "p95 latency is {{ $value | humanizeDuration }} on {{ $labels.endpoint }}."
+
+      - alert: HighAPILatencyP99
+        expr: |
+          histogram_quantile(0.99, sum(rate(api_request_duration_seconds_bucket[5m])) by (le, endpoint))
+          > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API p99 latency above 5s on {{ $labels.endpoint }}"
+          description: "p99 latency is {{ $value | humanizeDuration }} on {{ $labels.endpoint }}."
+
+      - alert: HighClientErrorRate
+        expr: |
+          sum(rate(api_errors_total{error_type="client_error"}[5m])) by (endpoint) /
+          sum(rate(api_requests_total[5m])) by (endpoint) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 4xx rate on {{ $labels.endpoint }}"
+          description: "Client error rate is {{ $value | humanizePercentage }} on {{ $labels.endpoint }}."
+
+  - name: rag_alerts
+    interval: 30s
+    rules:
+      - alert: RAGPipelineSlow
+        expr: |
+          histogram_quantile(0.99, sum(rate(rag_total_duration_seconds_bucket[10m])) by (le))
+          > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG pipeline p99 latency above 10s"
+          description: "RAG pipeline p99 is {{ $value | humanizeDuration }}."
+
+      - alert: RAGRetrievalFailureRate
+        expr: |
+          sum(rate(rag_retrievals_total{status="failure"}[5m])) /
+          sum(rate(rag_retrievals_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG retrieval failure rate above 5%"
+          description: "Retrieval failure rate is {{ $value | humanizePercentage }}."
+
+      - alert: LLMResponseSlow
+        expr: |
+          histogram_quantile(0.95, sum(rate(rag_llm_duration_seconds_bucket[10m])) by (le, model_name))
+          > 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM p95 response time above 15s (model: {{ $labels.model_name }})"
+          description: "LLM p95 is {{ $value | humanizeDuration }} for {{ $labels.model_name }}."
+
+  - name: infrastructure_alerts
+    interval: 60s
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} ({{ $labels.instance }}) has been unreachable for over 2 minutes."
+
+      - alert: DatabaseQuerySlow
+        expr: |
+          histogram_quantile(0.95, sum(rate(db_query_duration_seconds_bucket[5m])) by (le, table, operation))
+          > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow DB queries on {{ $labels.table }}.{{ $labels.operation }}"
+          description: "p95 query time is {{ $value | humanizeDuration }} on {{ $labels.table }}.{{ $labels.operation }}."
+
+      - alert: CeleryTaskFailures
+        expr: |
+          sum(rate(celery_tasks_total{status="failure"}[5m])) by (task_name) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery task failures: {{ $labels.task_name }}"
+          description: "Task {{ $labels.task_name }} is failing at {{ $value | humanize }} failures/s."
+
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | humanize }}% on {{ $labels.instance }}."
+
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | humanize }}% on {{ $labels.instance }}."
+
+      - alert: HighDiskUsage
+        expr: |
+          100 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} /
+                 node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }} mount {{ $labels.mountpoint }}"
+          description: "Disk usage is {{ $value | humanize }}% on {{ $labels.mountpoint }}."
+
+      - alert: DBConnectionsHigh
+        expr: |
+          pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of active DB connections"
+          description: "{{ $value }} active PostgreSQL connections."
+
+      - alert: GPUOverload
+        expr: |
+          DCGM_FI_DEV_GPU_UTIL > 95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU utilization above 95% on {{ $labels.gpu }}"
+          description: "GPU {{ $labels.gpu }} is at {{ $value }}% utilization."
+
+      - alert: DBSlowQueriesSpike
+        expr: |
+          rate(db_query_duration_seconds_count[5m]) > 0 and
+          histogram_quantile(0.95, sum(rate(db_query_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB slow query spike detected"
+          description: "p95 DB query time has risen above 2s."

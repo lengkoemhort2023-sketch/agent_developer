@@ -1,14 +1,24 @@
-name: agent_developer_dev
+name: agent_developer
 
-# Infrastructure-only compose for local macOS development.
-# Run the app (web, celery, beat) natively to get MPS GPU access.
-#
-# Usage:
-#   docker compose -f docker-compose.dev.yml up -d
+# Single compose file for local development.
+# Run app services natively to get MPS GPU access:
 #   python manage.py runserver
 #   celery -A app.core worker -l info -E --concurrency=3
+#
+# Start infrastructure:
+#   docker compose up -d
+#
+# OTLP routing:
+#   Direct → Tempo:          OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317  (traces only)
+#   Via OTel Collector:      OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:5317  (traces + metrics → Prometheus)
+#
+# GPU monitoring (NVIDIA only):
+#   docker compose --profile gpu up -d
 
 services:
+
+    # ── App dependencies ──────────────────────────────────────────────────────
+
     db:
         image: postgres:15
         ports:
@@ -49,16 +59,24 @@ services:
 
     # --- Logs (Loki + Promtail) ---
     loki:
-        image: grafana/loki:latest
+        image: grafana/loki:2.9.3
+        container_name: loki
+        user: "0:0"
         ports:
             - 3100:3100
         volumes:
-            - ./docker/loki/loki.yml:/etc/loki/local-config.yaml:ro
+            - ./monitoring/loki.yml:/etc/loki/local-config.yml:ro
             - loki_data:/loki
-        command: -config.file=/etc/loki/local-config.yaml
+        command: -config.file=/etc/loki/local-config.yml
         restart: unless-stopped
         networks:
             - net
+        deploy:
+            resources:
+                limits:
+                    memory: 1G
+                reservations:
+                    memory: 256M
 
     # Dev: reads ./logs/ where Django writes app.log and security.log
     promtail:
@@ -75,25 +93,33 @@ services:
 
     # --- Traces (Tempo) ---
     tempo:
-        image: grafana/tempo:latest
+        image: grafana/tempo:2.1.1
+        container_name: tempo
+        user: "0:0"
         ports:
             - 3200:3200   # Tempo HTTP / Grafana datasource
-            - 4317:4317   # OTLP gRPC  — Django sends traces here
-            - 4318:4318   # OTLP HTTP
+            - 4317:4317   # OTLP gRPC direct — Django sends traces here
+            - 4318:4318   # OTLP HTTP direct
         volumes:
-            - ./docker/tempo/tempo.yml:/etc/tempo.yaml:ro
+            - ./monitoring/tempo.yml:/etc/tempo.yml:ro
             - tempo_data:/var/tempo
-        command: -config.file=/etc/tempo.yaml
+        command: -config.file=/etc/tempo.yml
         restart: unless-stopped
         networks:
             - net
+        deploy:
+            resources:
+                limits:
+                    memory: 2G
+                reservations:
+                    memory: 512M
 
     # --- OpenTelemetry Collector (receives traces + metrics, routes to backends) ---
     otel-collector:
         image: otel/opentelemetry-collector-contrib:latest
         ports:
-            - 5317:4317   # OTLP gRPC  — Django sends traces & metrics here
-            - 5318:4318   # OTLP HTTP
+            - 5317:4317   # OTLP gRPC via collector — use this for traces + metrics routing
+            - 5318:4318   # OTLP HTTP via collector
             - 8889:8889   # Prometheus exporter (scraped by Prometheus)
         volumes:
             - ./docker/otel-collector/config.yml:/etc/otel-collector/config.yml:ro
@@ -107,40 +133,73 @@ services:
     # --- Metrics (Prometheus) ---
     prometheus:
         image: prom/prometheus:latest
+        container_name: prometheus
         ports:
             - 9090:9090
         volumes:
-            - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+            - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+            - ./monitoring/prometheus_rules.yml:/etc/prometheus/prometheus_rules.yml:ro
             - prometheus_data:/prometheus
         command:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
             - --web.enable-lifecycle
+            - --web.console.libraries=/usr/share/prometheus/console_libraries
+            - --web.console.templates=/usr/share/prometheus/consoles
         extra_hosts:
             - host.docker.internal:host-gateway
         restart: unless-stopped
         networks:
             - net
+        healthcheck:
+            test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+        deploy:
+            resources:
+                limits:
+                    memory: 2G
+                reservations:
+                    memory: 512M
 
+    # --- Visualization (Grafana) ---
     grafana:
         image: grafana/grafana:latest
+        container_name: grafana
         ports:
             - 3001:3000
-        volumes:
-            - grafana_data:/var/lib/grafana
-            - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
-            - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
         environment:
             - GF_SECURITY_ADMIN_USER=admin
             - GF_SECURITY_ADMIN_PASSWORD=admin
             - GF_AUTH_ANONYMOUS_ENABLED=true
             - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+            - GF_SECURITY_ALLOW_EMBED_FRAMES=true
+            - GF_SECURITY_COOKIE_SAMESITE=None
+        volumes:
+            - grafana_data:/var/lib/grafana
+            - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+            - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
         depends_on:
             - prometheus
+            - loki
+            - tempo
         restart: unless-stopped
         networks:
             - net
+        healthcheck:
+            test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+        deploy:
+            resources:
+                limits:
+                    memory: 1G
+                reservations:
+                    memory: 256M
 
+    # --- Host metrics ---
     node-exporter:
         image: prom/node-exporter:latest
         pid: host
@@ -156,17 +215,17 @@ services:
         networks:
             - net
 
-    # LLM observability — tracks every prompt, response, and token usage.
+    # ── LLM observability ─────────────────────────────────────────────────────
     # Access UI at http://localhost:3002  (create account on first run)
     langfuse:
         image: langfuse/langfuse:2
         ports:
             - 3002:3000
         environment:
-            - DATABASE_URL=postgresql://postgres:postgres@db:5432/langfuse
-            - NEXTAUTH_URL=http://localhost:3002
-            - NEXTAUTH_SECRET=docbot-langfuse-secret-change-in-prod
-            - SALT=docbot-langfuse-salt-change-in-prod
+            - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres}@db:5432/langfuse
+            - NEXTAUTH_URL=http://${SERVER_IP:-localhost}:3002
+            - NEXTAUTH_SECRET=${LANGFUSE_NEXTAUTH_SECRET:-docbot-langfuse-secret-change-in-prod}
+            - SALT=${LANGFUSE_SALT:-docbot-langfuse-salt-change-in-prod}
             - TELEMETRY_ENABLED=false
         depends_on:
             - db
@@ -174,8 +233,30 @@ services:
         networks:
             - net
 
-    # Scrapes Celery task events from the Redis broker.
-    # Requires celery workers started with -E (events enabled).
+    # ── DB / Cache exporters ──────────────────────────────────────────────────
+
+    postgres-exporter:
+        image: prometheuscommunity/postgres-exporter:latest
+        environment:
+            - DATA_SOURCE_NAME=postgresql://postgres:postgres@db:5432/postgres?sslmode=disable
+        depends_on:
+            - db
+        restart: unless-stopped
+        networks:
+            - net
+
+    redis-exporter:
+        image: oliver006/redis_exporter:latest
+        environment:
+            - REDIS_ADDR=redis://redis:6379
+        depends_on:
+            - redis
+        restart: unless-stopped
+        networks:
+            - net
+
+    # ── Celery task metrics ───────────────────────────────────────────────────
+    # Requires celery workers started with -E (events enabled)
     celery-exporter:
         image: danihodovic/celery-exporter:latest
         platform: linux/amd64
@@ -186,6 +267,24 @@ services:
         restart: unless-stopped
         networks:
             - net
+
+    # ── GPU monitoring (NVIDIA only) ──────────────────────────────────────────
+    # Start with: docker compose --profile gpu up -d
+    dcgm-exporter:
+        image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.0-ubuntu22.04
+        profiles: [gpu]
+        cap_add:
+            - SYS_ADMIN
+        restart: unless-stopped
+        networks:
+            - net
+        deploy:
+            resources:
+                reservations:
+                    devices:
+                        - driver: nvidia
+                          count: all
+                          capabilities: [gpu]
 
 volumes:
     postgres_data:

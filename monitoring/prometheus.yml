@@ -11,7 +11,8 @@ alerting:
     - static_configs:
         - targets: []
 
-rule_files: []
+rule_files:
+  - /etc/prometheus/prometheus_rules.yml
 
 scrape_configs:
   # Django/Gunicorn metrics
@@ -31,19 +32,29 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # PostgreSQL (if using postgres_exporter)
+  # PostgreSQL exporter
   - job_name: 'postgres'
     static_configs:
-      - targets: ['db:5432']
-    metrics_path: '/metrics'
+      - targets: ['postgres-exporter:9187']
     scrape_interval: 30s
 
-  # Redis (if using redis_exporter)
+  # Redis exporter
   - job_name: 'redis'
     static_configs:
-      - targets: ['redis:6379']
-    metrics_path: '/metrics'
+      - targets: ['redis-exporter:9121']
     scrape_interval: 30s
+
+  # Node exporter — host CPU / RAM / Network / Disk
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+
+  # Celery exporter — worker & queue metrics
+  - job_name: 'celery'
+    static_configs:
+      - targets: ['celery-exporter:9808']
+    scrape_interval: 15s
 
   # OpenTelemetry Collector Prometheus exporter
   - job_name: 'otel-collector'

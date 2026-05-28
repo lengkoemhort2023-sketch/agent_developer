@@ -3,6 +3,7 @@ import os
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
+from langfuse.decorators import observe
 
 from document.models import Document
 from document.utils import (
@@ -110,6 +111,7 @@ def _deactivate_superseded_family_vectors(document: Document) -> None:
             )
 
 @shared_task
+@observe(name="celery.process_upload_to_vector_db")
 def process_upload_to_vector_db(full_path: str, document_id: str, document_name: str, doc_type_name: str, doc_type_id: str):
     try:
         _run_vector_processing(full_path, document_id, document_name, doc_type_name, doc_type_id)
@@ -126,6 +128,7 @@ def process_document_indexing_job(job_id: str):
 
 
 @shared_task
+@observe(name="celery.extract_document_indexing_job")
 def extract_document_indexing_job(job_id: str):
     from document.models import DocumentIndexingJob
 
@@ -166,6 +169,7 @@ def extract_document_indexing_job(job_id: str):
 
 
 @shared_task
+@observe(name="celery.index_document_indexing_job")
 def index_document_indexing_job(job_id: str):
     from document.models import DocumentIndexingJob
 
@@ -209,6 +213,7 @@ def index_document_indexing_job(job_id: str):
 
 
 @shared_task
+@observe(name="celery.finalize_document_indexing_job")
 def finalize_document_indexing_job(job_id: str):
     from document.models import DocumentIndexingJob
 
@@ -223,6 +228,7 @@ def finalize_document_indexing_job(job_id: str):
     job.save(update_fields=["status", "stage", "finished_at", "updated_at"])
 
 @shared_task
+@observe(name="celery.process_unprocessed_documents")
 def process_unprocessed_documents():
     from base.application.document_indexing import create_document_indexing_job
     from document.models import DocumentIndexingJob
@@ -257,6 +263,7 @@ def process_unprocessed_documents():
     print("Batch process for unprocessed documents finished.")
 
 @shared_task
+@observe(name="celery.deactivate_document")
 def deactivate_document(document_id: str, doc_type_name: str = "unknown"):
     """
     Deactivate document a document by deactivating it in the RAG system.
@@ -280,6 +287,7 @@ def deactivate_document(document_id: str, doc_type_name: str = "unknown"):
         raise
 
 @shared_task
+@observe(name="celery.activate_document")
 def activate_document(document_id: str):
     """
     Activate document by activating chunk in RAG system.
@@ -321,6 +329,7 @@ def activate_document(document_id: str):
 
 
 @shared_task
+@observe(name="celery.cleanup_deleted_document_artifacts")
 def cleanup_deleted_document_artifacts(document_id: str, file_path: str = "", doc_type_name: str = "unknown"):
     """Remove document artifacts after the DB row has already been deleted."""
     logger.info(

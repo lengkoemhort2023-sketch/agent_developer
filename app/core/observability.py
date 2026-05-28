@@ -11,7 +11,8 @@ This module configures:
 import os
 import logging
 import json
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
 from typing import Optional
 
 from opentelemetry.sdk.resources import Resource
@@ -28,13 +29,30 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, REGISTRY
 
+# Thread-local storage for per-request context (populated by RequestIDMiddleware)
+_request_context = threading.local()
+
+
+def set_request_context(request_id: str = None, user_id: str = None):
+    """Set per-request context so all log records carry request_id and user_id."""
+    if request_id is not None:
+        _request_context.request_id = request_id
+    if user_id is not None:
+        _request_context.user_id = user_id
+
+
+def clear_request_context():
+    """Clear request context after the request completes."""
+    _request_context.request_id = None
+    _request_context.user_id = None
+
 
 class JSONFormatter(logging.Formatter):
     """JSON formatter for structured logging (Loki compatible)"""
-    
+
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -42,27 +60,35 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno,
         }
-        
+
+        # Inject OpenTelemetry trace/span IDs for log-trace correlation in Grafana
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx.is_valid:
+            log_data["trace_id"] = format(ctx.trace_id, "032x")
+            log_data["span_id"] = format(ctx.span_id, "016x")
+
         # Add exception info if present
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
-        
-        # Add request context if available
-        if hasattr(record, "request_id"):
+
+        # Add request context if available (set by RequestContextFilter)
+        if hasattr(record, "request_id") and record.request_id:
             log_data["request_id"] = record.request_id
-        if hasattr(record, "user_id"):
+        if hasattr(record, "user_id") and record.user_id:
             log_data["user_id"] = record.user_id
         if hasattr(record, "duration_ms"):
             log_data["duration_ms"] = record.duration_ms
-            
+
         return json.dumps(log_data)
 
 
 class RequestContextFilter(logging.Filter):
-    """Add request context to log records from request thread-local storage"""
-    
+    """Inject per-request context (request_id, user_id) from thread-local into every log record."""
+
     def filter(self, record: logging.LogRecord) -> bool:
-        # This can be extended to pull request context from Django request
+        record.request_id = getattr(_request_context, "request_id", None)
+        record.user_id = getattr(_request_context, "user_id", None)
         return True
 
 
@@ -192,14 +218,28 @@ def init_prometheus_metrics():
         buckets=[1.0, 5.0, 10.0, 30.0, 60.0],
         registry=REGISTRY
     )
-    
+
     celery_tasks_total = Counter(
         "celery_tasks_total",
         "Total Celery tasks processed",
         ["task_name", "status"],
         registry=REGISTRY
     )
-    
+
+    # Concurrency / saturation metrics (section F)
+    active_requests = Gauge(
+        "api_active_requests",
+        "Number of requests currently being processed",
+        registry=REGISTRY
+    )
+
+    timeout_errors = Counter(
+        "api_timeout_errors_total",
+        "Total request timeout errors",
+        ["endpoint"],
+        registry=REGISTRY
+    )
+
     return {
         "api_requests": api_requests,
         "api_latency": api_latency,
@@ -218,6 +258,8 @@ def init_prometheus_metrics():
         "db_connection_pool": db_connection_pool,
         "celery_task_duration": celery_task_duration,
         "celery_tasks_total": celery_tasks_total,
+        "active_requests": active_requests,
+        "timeout_errors": timeout_errors,
     }
 
 
@@ -236,7 +278,7 @@ def init_otel_tracing():
     })
     
     # Setup OTLP exporter for Tempo
-    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:5317")
+    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     
     try:
         trace_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
@@ -248,7 +290,11 @@ def init_otel_tracing():
         DjangoInstrumentor().instrument()
         RequestsInstrumentor().instrument()
         CeleryInstrumentor().instrument()
-        
+        try:
+            SQLAlchemyInstrumentor().instrument()
+        except Exception:
+            pass  # Only applies when project uses SQLAlchemy directly
+
         return tracer_provider
     except Exception as e:
         logging.warning(f"Failed to initialize OpenTelemetry: {e}")
@@ -262,7 +308,7 @@ def init_otel_metrics():
     if not otel_metrics_enabled:
         return None
     
-    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:5317")
+    otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     
     try:
         metric_reader = PeriodicExportingMetricReader(
@@ -335,6 +381,8 @@ class ObservabilityContext:
         return cls._instance
     
     def __init__(self):
+        if hasattr(self, "initialized"):
+            return  # Already set up — prevent singleton re-init resetting state
         self.metrics = None
         self.tracer_provider = None
         self.meter_provider = None

@@ -495,7 +495,7 @@ OTEL_ENVIRONMENT = os.environ.get("OTEL_ENVIRONMENT", "development")
 OTEL_EXPORTER_OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:5317")
 
 # Langfuse configuration (for LLM observability)
-LANGFUSE_ENABLED = env_bool("LANGFUSE_ENABLED", False)
+LANGFUSE_ENABLED = env_bool("LANGFUSE_ENABLED", True)
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "http://localhost:3002")

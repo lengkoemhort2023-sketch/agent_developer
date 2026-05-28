@@ -45,6 +45,7 @@ from base.monitoring.metrics import (
     rag_retrieval_attempts_total,
 )
 from base.tracing import get_tracer
+from langfuse.decorators import observe
 
 from .config import (
     AGENTIC_RAG_ENABLED,
@@ -83,6 +84,7 @@ class AgenticRAG:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    @observe(name="rag.get_docs", capture_input=True)
     def get_docs(
         self,
         question: str,

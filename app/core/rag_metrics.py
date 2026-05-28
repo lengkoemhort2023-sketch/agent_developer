@@ -6,6 +6,8 @@ Provides decorators and context managers for tracking RAG operations.
 
 import time
 import logging
+import asyncio
+import inspect
 from functools import wraps
 from contextlib import contextmanager
 from typing import Optional, Any, Dict
@@ -121,26 +123,29 @@ def track_rag_pipeline(pipeline_name: str = "default"):
         
         try:
             yield context
+        except Exception as e:
+            span.set_attribute("error", True)
+            span.record_exception(e)
+            raise
         finally:
             duration = time.time() - start_time
-            
+
             metrics_obj = observability.metrics
             if metrics_obj:
                 try:
                     metrics_obj["rag_total_duration"].observe(duration)
                 except Exception as e:
                     logger.warning(f"Error recording pipeline metrics: {e}")
-            
-            # Log summary
+
             logger.info(
-                f"RAG pipeline completed",
+                "RAG pipeline completed",
                 extra={
                     "pipeline": pipeline_name,
                     "duration_ms": duration * 1000,
                     **context
                 }
             )
-            
+
             span.set_attribute("duration_ms", duration * 1000)
 
 
@@ -155,25 +160,41 @@ def track_rag_operation(operation_type: str):
             pass
     """
     def decorator(func):
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with tracer.start_as_current_span(f"rag.{operation_type}") as span:
+                    span.set_attribute("operation", operation_type)
+                    start_time = time.time()
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception as e:
+                        span.set_attribute("error", True)
+                        span.record_exception(e)
+                        logger.error(f"Operation {operation_type} failed: {e}", exc_info=True)
+                        raise
+                    finally:
+                        span.set_attribute("duration_ms", (time.time() - start_time) * 1000)
+            return async_wrapper
+
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def sync_wrapper(*args, **kwargs):
             with tracer.start_as_current_span(f"rag.{operation_type}") as span:
                 span.set_attribute("operation", operation_type)
-                
                 start_time = time.time()
                 try:
-                    result = func(*args, **kwargs)
-                    return result
+                    return func(*args, **kwargs)
                 except Exception as e:
                     span.set_attribute("error", True)
+                    span.record_exception(e)
                     logger.error(f"Operation {operation_type} failed: {e}", exc_info=True)
                     raise
                 finally:
                     duration = time.time() - start_time
                     span.set_attribute("duration_ms", duration * 1000)
                     logger.debug(f"Operation {operation_type} completed in {duration*1000:.2f}ms")
-        
-        return wrapper
+
+        return sync_wrapper
     return decorator
 
 
@@ -187,34 +208,49 @@ def track_database_query(table: str, operation: str):
             # implementation
             pass
     """
+    def _record(span, duration):
+        span.set_attribute("duration_ms", duration * 1000)
+        metrics_obj = observability.metrics
+        if metrics_obj:
+            try:
+                metrics_obj["db_query_duration"].labels(
+                    table=table, operation=operation
+                ).observe(duration)
+            except Exception as exc:
+                logger.warning(f"Error recording DB metrics: {exc}")
+
     def decorator(func):
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with tracer.start_as_current_span("db.query") as span:
+                    span.set_attribute("table", table)
+                    span.set_attribute("operation", operation)
+                    start_time = time.time()
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception as e:
+                        span.set_attribute("error", True)
+                        span.record_exception(e)
+                        raise
+                    finally:
+                        _record(span, time.time() - start_time)
+            return async_wrapper
+
         @wraps(func)
-        def wrapper(*args, **kwargs):
-            with tracer.start_as_current_span(f"db.query") as span:
+        def sync_wrapper(*args, **kwargs):
+            with tracer.start_as_current_span("db.query") as span:
                 span.set_attribute("table", table)
                 span.set_attribute("operation", operation)
-                
                 start_time = time.time()
                 try:
-                    result = func(*args, **kwargs)
-                    return result
+                    return func(*args, **kwargs)
                 except Exception as e:
                     span.set_attribute("error", True)
+                    span.record_exception(e)
                     raise
                 finally:
-                    duration = time.time() - start_time
-                    
-                    metrics_obj = observability.metrics
-                    if metrics_obj:
-                        try:
-                            metrics_obj["db_query_duration"].labels(
-                                table=table,
-                                operation=operation
-                            ).observe(duration)
-                        except Exception as e:
-                            logger.warning(f"Error recording DB metrics: {e}")
-                    
-                    span.set_attribute("duration_ms", duration * 1000)
-        
-        return wrapper
+                    _record(span, time.time() - start_time)
+
+        return sync_wrapper
     return decorator

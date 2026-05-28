@@ -4,13 +4,17 @@ API Metrics and Tracing Middleware
 Captures request metrics and creates traces for API calls.
 """
 
+import re
 import time
 import logging
 from typing import Callable
 from django.utils.deprecation import MiddlewareMixin
 from django.http import HttpRequest, HttpResponse
 from opentelemetry import trace
-from app.core.observability import observability
+from app.core.observability import observability, set_request_context, clear_request_context
+
+_UUID_RE = re.compile(r'/[a-f0-9-]{36}')
+_ID_RE = re.compile(r'/\d+')
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -36,11 +40,19 @@ class APIMetricsMiddleware(MiddlewareMixin):
     def process_request(self, request: HttpRequest):
         """Start timing the request"""
         request._start_time = time.time()
-        
+
         # Extract endpoint
         path = request.path
         request._endpoint = self._normalize_path(path)
-        
+
+        if path not in self.EXCLUDED_PATHS:
+            metrics = observability.metrics
+            if metrics:
+                try:
+                    metrics["active_requests"].inc()
+                except Exception:
+                    pass
+
         return None
     
     def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
@@ -99,22 +111,33 @@ class APIMetricsMiddleware(MiddlewareMixin):
                     )
                 except Exception as e:
                     logger.warning(f"Error recording metrics: {e}")
-        
+
+            metrics = observability.metrics
+            if metrics:
+                try:
+                    metrics["active_requests"].dec()
+                except Exception:
+                    pass
+
         return response
-    
+
     def process_exception(self, request: HttpRequest, exception: Exception):
         """Record exception metrics"""
         endpoint = getattr(request, "_endpoint", request.path)
         method = request.method
-        
+
         metrics = observability.metrics
         if metrics:
-            metrics["api_errors"].labels(
-                method=method,
-                endpoint=endpoint,
-                error_type="exception"
-            ).inc()
-        
+            try:
+                metrics["api_errors"].labels(
+                    method=method,
+                    endpoint=endpoint,
+                    error_type="exception"
+                ).inc()
+                metrics["active_requests"].dec()
+            except Exception:
+                pass
+
         logger.error(
             f"API Exception: {method} {endpoint}",
             exc_info=True,
@@ -123,38 +146,42 @@ class APIMetricsMiddleware(MiddlewareMixin):
                 "endpoint": endpoint,
             }
         )
-        
+
         return None
     
     @staticmethod
     def _normalize_path(path: str) -> str:
         """Normalize path to reduce cardinality (e.g., /api/chats/123 -> /api/chats/:id)"""
-        import re
-        
-        # Replace UUID patterns
-        path = re.sub(r'/[a-f0-9\-]{36}', '/:id', path)
-        # Replace numeric IDs
-        path = re.sub(r'/\d+', '/:id', path)
-        
-        return path
+        path = _UUID_RE.sub('/:id', path)
+        return _ID_RE.sub('/:id', path)
 
 
 class RequestIDMiddleware(MiddlewareMixin):
     """Add request ID for distributed tracing"""
     
     def process_request(self, request: HttpRequest):
-        """Extract or generate request ID"""
+        """Extract or generate request ID, link to active OTel span, and set thread-local context."""
         import uuid
-        
-        # Try to get from header (for propagation)
+
         request_id = request.META.get("HTTP_X_REQUEST_ID") or str(uuid.uuid4())
         request.request_id = request_id
-        
-        # Add to response headers
+
+        # Correlate request ID with the active trace span
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("http.request_id", request_id)
+
+        # Populate thread-local so every log record on this thread carries request_id/user_id
+        try:
+            user_id = str(request.user.pk) if request.user.is_authenticated else None
+        except Exception:
+            user_id = None
+        set_request_context(request_id=request_id, user_id=user_id)
         return None
-    
+
     def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
-        """Add request ID to response"""
+        """Add request ID to response and clear thread-local context."""
         if hasattr(request, "request_id"):
             response["X-Request-ID"] = request.request_id
+        clear_request_context()
         return response

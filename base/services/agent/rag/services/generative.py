@@ -23,6 +23,22 @@ from typing import List, Dict, Any, Optional
 import re
 import psutil
 from app.core.observability import observability
+from base.monitoring.langfuse_tracer import (
+    register_trace,
+    get_trace_id,
+    update_current_observation,
+    update_current_trace,
+    get_current_trace_id,
+    score_trace,
+    extract_token_usage,
+    estimate_cost,
+)
+try:
+    from langfuse.decorators import observe as lf_observe
+except ImportError:
+    def lf_observe(*a, **kw):  # type: ignore[misc]
+        def _d(f): return f
+        return _d if (a and not callable(a[0])) else (a[0] if a else _d)
 
 
 def cleanup_bold_colon(text: str) -> str:
@@ -490,6 +506,7 @@ class ResponseGenerationService:
 
         return cleaned
 
+    @lf_observe(name="rag.llm.followup", capture_input=False, capture_output=False)
     def _generate_followup_questions(self, question: str, top_answers: list, count: int, language: str) -> list:
         """
         Generate follow-up questions using LLM from chunk header + content (up to 200 words).
@@ -555,6 +572,17 @@ class ResponseGenerationService:
             logger.info(f"Generating {count} follow-up questions via LLM (lang={language})")
             resp = self.llm.invoke([HumanMessage(content=prompt)])
             resp_text = (resp.content or "").strip()
+
+            # A. LLM Performance — token usage
+            _usage = extract_token_usage(resp)
+            update_current_observation(
+                metadata={
+                    "model": settings.OLLAMA_MODEL,
+                    "language": language,
+                    **_usage,
+                    "cost_usd": estimate_cost(_usage["input_tokens"], _usage["output_tokens"]),
+                },
+            )
 
             # -- Parse LLM output ----------------------------------------------
             # Strip <think>...</think> blocks produced by reasoning/thinking models
@@ -738,6 +766,7 @@ yes or no"""
         logger.warning(f"Could not resolve a collection for doc_id={doc_id}")
         return None
 
+    @lf_observe(name="rag.retrieval", capture_input=False, capture_output=False)
     def get_related_docs(self, question: str, file_type=None, query_language: str = None, k: int = 5, doc_id: str = None):
         """
         Get related documents for a user query.
@@ -907,6 +936,18 @@ yes or no"""
             logger.info(f"Combined chunks keys (doc_ids): {list(combined_chunks.keys())}")
             logger.info(f"Retrieved {len(combined_chunks)} documents, top score: {combined_chunks[sorted_doc_ids[0]]['max_score']:.4f}" if combined_chunks else "No documents retrieved")
 
+            # B. RAG Retrieval — record retrieval result in Langfuse
+            update_current_observation(
+                metadata={
+                    "docs_retrieved": len(combined_chunks),
+                    "top_score": combined_chunks[sorted_doc_ids[0]]["max_score"] if combined_chunks else 0,
+                    "collection": str(file_type) if file_type else "all",
+                    "query_language": query_language,
+                    "doc_scoped": bool(doc_id),
+                    "status": "success" if combined_chunks else "empty",
+                },
+                output={"docs_retrieved": len(combined_chunks)},
+            )
             return combined_chunks
 
         except Exception as e:
@@ -1494,6 +1535,17 @@ yes or no"""
             payload=payload
         )
         self.client.upsert(collection_name=self.history_collection_name, points=[updated_point])
+
+        # C. Response Quality — post user feedback score to Langfuse
+        trace_id = get_trace_id(question_id)
+        if trace_id:
+            score_trace(
+                trace_id=trace_id,
+                name="user_relevance",
+                value=float(is_relevant),
+                comment=f"answer_index={answer_index}, value={is_relevant} (-1=not relevant, 0=neutral, 1=relevant)",
+            )
+
         return scroll_result
 
     def get_file_from_media(self, file_id: str, user_token):
@@ -1745,6 +1797,7 @@ yes or no"""
             logger.error(f"Error converting markdown table to HTML: {e}")
             return text
 
+    @lf_observe(name="rag.llm.content", capture_input=False, capture_output=False)
     def llm_content(self, chunk_data: dict, question: str, language_name: str) -> str:
         """
         Called only when the top-1 retrieved chunk has header == 'Content'.
@@ -1813,6 +1866,20 @@ yes or no"""
             response = self.llm.invoke([HumanMessage(content=prompt)])
             result = (response.content or "").strip()
 
+            # A. LLM Performance — token usage
+            _usage = extract_token_usage(response)
+            update_current_observation(
+                metadata={
+                    "model": settings.OLLAMA_MODEL,
+                    "language": language_name,
+                    "body_length": len(body),
+                    **_usage,
+                    "cost_usd": estimate_cost(_usage["input_tokens"], _usage["output_tokens"]),
+                    "answer_length": len(result),
+                    "status": "success" if result else "empty",
+                },
+            )
+
             if result:
                 logger.info(f"llm_content: got answer, length={len(result)}")
                 
@@ -1845,8 +1912,13 @@ yes or no"""
 
         except Exception as e:
             logger.error(f"llm_content error: {e}")
+            update_current_observation(
+                metadata={"error": str(e), "status": "error"},
+                level="ERROR",
+            )
             return (chunk_data.get('content') or chunk_data.get('page_content', '')).strip()
 
+    @lf_observe(name="rag.llm.synthesize", capture_input=False, capture_output=False)
     def _synthesize_answer(self, question: str, chunks: List[Dict], language: str, is_content_header: bool = False) -> str:
         """Synthesize an answer from multiple chunks with citations."""
         try:
@@ -1888,6 +1960,20 @@ yes or no"""
 
             msg = self.llm.invoke([HumanMessage(content=prompt)])
             result = (msg.content or "").strip()
+
+            # A. LLM Performance — token usage
+            _usage = extract_token_usage(msg)
+            update_current_observation(
+                metadata={
+                    "model": settings.OLLAMA_MODEL,
+                    "language": language,
+                    "chunks_count": len(chunks),
+                    "is_content_header": is_content_header,
+                    **_usage,
+                    "cost_usd": estimate_cost(_usage["input_tokens"], _usage["output_tokens"]),
+                    "answer_length": len(result),
+                },
+            )
             
             # Check for markdown table and convert to HTML if needed (matching legacy behavior)
             if '|' in result:
@@ -1981,6 +2067,7 @@ yes or no"""
             logger.error(f"Verification error: {e}")
             return answer
 
+    @lf_observe(name="rag.llm.rephrase", capture_input=False, capture_output=False)
     def _clean_and_rephrase_with_llm(self, text: str, language_name: str, question: str = None, answer_style: str = "exact", max_tokens: int = 512) -> str:
         """
         Use the LLM to extract exact answers from chunks or format content.
@@ -2137,7 +2224,21 @@ Snippet:
 
             response = self.llm.invoke([HumanMessage(content=prompt)])
             cleaned = (response.content or "").strip()
-            
+
+            # A. LLM Performance — token usage
+            _usage = extract_token_usage(response)
+            update_current_observation(
+                metadata={
+                    "model": settings.OLLAMA_MODEL,
+                    "language": language_name,
+                    "answer_style": answer_style,
+                    "has_question": bool(question),
+                    **_usage,
+                    "cost_usd": estimate_cost(_usage["input_tokens"], _usage["output_tokens"]),
+                    "output_length": len(cleaned),
+                },
+            )
+
             # Log token usage
             try:
                 self.token_logger.log_token_usage(
@@ -2266,10 +2367,25 @@ Snippet:
             
         return False
 
+    @lf_observe(name="rag.response", capture_input=False, capture_output=False)
     def response(self, question, question_id=None, file_type=None, user_token=None, simplified_output: bool = False, session_id=None, answer_style: str = "exact", doc_id: str = None):
         if not question_id:
             question_id = str(uuid.uuid4())
         logger.info(f"Starting response generation for question_id: {question_id}")
+
+        # Attach Langfuse trace context (D. Pipeline Flow)
+        update_current_trace(
+            name=f"RAG: {question[:60]}",
+            session_id=str(session_id) if session_id else None,
+            metadata={
+                "question_id": question_id,
+                "answer_style": answer_style,
+                "file_type": file_type,
+                "doc_id": doc_id,
+            },
+            input=question,
+        )
+        register_trace(question_id, get_current_trace_id())
 
         original_question = question
         question = strip_mention_prefix(question)
@@ -3066,6 +3182,28 @@ Snippet:
                         followup_t = _t.get('followup_llm', _t.get('process', _t['start'])) - _t.get('process', _t['start'])
                         other_t = _t['total'] - _t['start'] - embed_t - retrieval_t - process_t - followup_t
                         logger.info(f"[TIMING] embed={embed_t:.2f}s | retrieval={retrieval_t:.2f}s | process={process_t:.2f}s | followup_llm={followup_t:.2f}s | other={other_t:.2f}s | total={_t['total']-_t['start']:.2f}s")
+
+                        # F. Performance Breakdown — record phase timings in Langfuse trace
+                        update_current_trace(
+                            output=combined_answer[:500] if combined_answer else "",
+                            metadata={
+                                "question_id": question_id,
+                                "language": language_name,
+                                "docs_retrieved": len(sorted_doc_ids),
+                                "docs_in_answer": len(selected_clean_document_references),
+                                "suggestions_count": len(suggestions),
+                                "answer_length": len(combined_answer),
+                                "phase_timings": {
+                                    "embed_s": round(embed_t, 3),
+                                    "retrieval_s": round(retrieval_t, 3),
+                                    "process_s": round(process_t, 3),
+                                    "followup_s": round(followup_t, 3),
+                                    "total_s": round(_t["total"] - _t["start"], 3),
+                                },
+                                "answer_style": answer_style,
+                                "retrieval_type": "agentic" if use_agentic_retrieval else "classic",
+                            },
+                        )
 
                         # Report phase durations to Prometheus
                         metrics = observability.metrics
