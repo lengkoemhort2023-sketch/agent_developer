@@ -44,6 +44,7 @@ from base.monitoring.metrics import (
     rag_requests_total,
     rag_retrieval_attempts_total,
 )
+from base.monitoring.langfuse_tracer import update_current_observation
 from base.tracing import get_tracer
 from langfuse.decorators import observe
 
@@ -188,6 +189,17 @@ class AgenticRAG:
                 rag_requests_total.labels(language=language, status="confidence_fail").inc()
                 rag_request_duration_seconds.labels(language=language).observe(time.perf_counter() - _start)
                 span.set_attribute("rag.status", "confidence_fail")
+                update_current_observation(
+                    metadata={
+                        "status": "confidence_fail",
+                        "confidence": round(confidence, 4),
+                        "confidence_threshold": threshold,
+                        "intent": plan.intent,
+                        "sub_queries_count": len(plan.sub_queries),
+                        "language": language,
+                    },
+                    level="WARNING",
+                )
                 return {}
 
             logger.info(f"[AgenticRAG] Confidence {confidence:.4f} ≥ {threshold:.4f} — proceeding")
@@ -201,6 +213,23 @@ class AgenticRAG:
             span.set_attribute("rag.status", "success")
             span.set_attribute("rag.chunks_returned", total_chunks)
             span.set_attribute("rag.docs_returned", len(result))
+            update_current_observation(
+                metadata={
+                    "status": "success",
+                    "intent": plan.intent,
+                    "sub_queries": plan.sub_queries,
+                    "sub_queries_count": len(plan.sub_queries),
+                    "confidence": round(confidence, 4),
+                    "confidence_threshold": threshold,
+                    "language": language,
+                    "docs_returned": len(result),
+                    "chunks_returned": total_chunks,
+                    "top_docs": [
+                        {"name": meta["file_name"], "score": round(meta["max_score"], 4)}
+                        for meta in list(result.values())[:5]
+                    ],
+                },
+            )
             return result
 
     # ── Private: retrieval with retry ─────────────────────────────────────────

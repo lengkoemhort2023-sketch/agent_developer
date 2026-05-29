@@ -10,10 +10,17 @@ This module configures:
 
 import os
 import logging
+import logging.handlers
 import json
 import threading
+import warnings
 from datetime import datetime, timezone
 from typing import Optional
+
+# Must come before OpenTelemetry imports — pkg_resources warns at import time.
+warnings.filterwarnings("ignore", category=UserWarning, module="opentelemetry")
+warnings.filterwarnings("ignore", category=UserWarning, module="pkg_resources")
+logging.getLogger("opentelemetry.instrumentation").setLevel(logging.CRITICAL)
 
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -22,7 +29,6 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.django import DjangoInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry import trace, metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
@@ -287,13 +293,11 @@ def init_otel_tracing():
         trace.set_tracer_provider(tracer_provider)
         
         # Instrument frameworks
-        DjangoInstrumentor().instrument()
-        RequestsInstrumentor().instrument()
-        CeleryInstrumentor().instrument()
-        try:
-            SQLAlchemyInstrumentor().instrument()
-        except Exception:
-            pass  # Only applies when project uses SQLAlchemy directly
+        for instr in [DjangoInstrumentor, RequestsInstrumentor, CeleryInstrumentor]:
+            try:
+                instr().instrument()
+            except Exception:
+                pass
 
         return tracer_provider
     except Exception as e:
@@ -360,6 +364,18 @@ def setup_structured_logging(log_level: str = "INFO"):
     console_handler.setFormatter(JSONFormatter())
     console_handler.addFilter(RequestContextFilter())
     root_logger.addHandler(console_handler)
+
+    # Also ship JSON logs to file for Promtail → Loki
+    try:
+        os.makedirs("logs", exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            "logs/app.log", maxBytes=10_485_760, backupCount=3
+        )
+        file_handler.setFormatter(JSONFormatter())
+        file_handler.addFilter(RequestContextFilter())
+        root_logger.addHandler(file_handler)
+    except Exception:
+        pass
     
     # Setup Django loggers
     django_logger = logging.getLogger("django")

@@ -24,6 +24,7 @@ from base.utils.exceptions import (
 )
 from pydantic import ValidationError
 
+from base.monitoring.langfuse_tracer import get_trace_id, score_trace
 from .models import ChatMessage, ChatSession, MessageFeedback
 from .serializers import (
     ChatMessageCreateSerializer,
@@ -608,6 +609,16 @@ def submit_feedback(request):
         f"Feedback {'created' if created else 'updated'}: "
         f"message={message_id} rating={rating} user={user}"
     )
+
+    # C. Response Quality — forward rating to Langfuse
+    trace_id = get_trace_id(message_id)
+    if trace_id:
+        score_trace(
+            trace_id=trace_id,
+            name="user_feedback",
+            value=float(rating),
+            comment=data.get("feedback_text", "").strip() or None,
+        )
 
     return success_response(
         "Feedback submitted successfully",

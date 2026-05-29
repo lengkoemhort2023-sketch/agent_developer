@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from celery import Celery
+from celery.signals import task_postrun
 
 from .env import load_environment
 
@@ -25,3 +26,13 @@ celery_app.conf.update(
     # and allows multiple tasks to run in parallel, hitting Ollama concurrently.
     worker_pool='threads',
 )
+
+
+@task_postrun.connect
+def flush_langfuse_after_task(sender=None, **kwargs):
+    """Flush Langfuse SDK buffer after every Celery task so traces are not lost when the worker exits."""
+    try:
+        from langfuse import Langfuse
+        Langfuse().flush()
+    except Exception:
+        pass

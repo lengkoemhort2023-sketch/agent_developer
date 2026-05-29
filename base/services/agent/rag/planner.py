@@ -18,6 +18,16 @@ from typing import Dict, List, Optional
 
 from langchain_core.messages import HumanMessage
 
+try:
+    from langfuse.decorators import observe as lf_observe
+    from base.monitoring.langfuse_tracer import update_current_observation
+    _LF = True
+except ImportError:
+    def lf_observe(*a, **kw):  # type: ignore[misc]
+        return (lambda f: f) if not a else a[0]
+    def update_current_observation(**kw): pass  # type: ignore[misc]
+    _LF = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +71,7 @@ class QueryPlanner:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    @lf_observe(name="rag.plan", capture_input=False, capture_output=False)
     def plan(self, question: str, language: str) -> QueryPlan:
         """
         Analyze *question* and return a :class:`QueryPlan`.
@@ -72,11 +83,27 @@ class QueryPlanner:
         Returns:
             A :class:`QueryPlan` with intent, sub_queries, and filters populated.
         """
+        used_heuristic = False
         try:
-            return self._llm_plan(question, language)
+            result = self._llm_plan(question, language)
         except Exception as exc:
             logger.warning(f"[Planner] LLM planning failed ({exc}), using heuristic plan")
-            return self._heuristic_plan(question, language)
+            result = self._heuristic_plan(question, language)
+            used_heuristic = True
+
+        update_current_observation(
+            input=question,
+            output=result.intent,
+            metadata={
+                "intent": result.intent,
+                "sub_queries": result.sub_queries,
+                "sub_queries_count": len(result.sub_queries),
+                "language": result.language,
+                "needs_table": result.needs_table,
+                "used_heuristic": used_heuristic,
+            },
+        )
+        return result
 
     # ── Private: LLM-based plan ───────────────────────────────────────────────
 

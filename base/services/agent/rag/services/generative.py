@@ -506,7 +506,7 @@ class ResponseGenerationService:
 
         return cleaned
 
-    @lf_observe(name="rag.llm.followup", capture_input=False, capture_output=False)
+    @lf_observe(name="rag.llm.followup", capture_input=False, capture_output=True)
     def _generate_followup_questions(self, question: str, top_answers: list, count: int, language: str) -> list:
         """
         Generate follow-up questions using LLM from chunk header + content (up to 200 words).
@@ -1797,7 +1797,7 @@ yes or no"""
             logger.error(f"Error converting markdown table to HTML: {e}")
             return text
 
-    @lf_observe(name="rag.llm.content", capture_input=False, capture_output=False)
+    @lf_observe(name="rag.llm.content", capture_input=False, capture_output=True)
     def llm_content(self, chunk_data: dict, question: str, language_name: str) -> str:
         """
         Called only when the top-1 retrieved chunk has header == 'Content'.
@@ -1918,7 +1918,7 @@ yes or no"""
             )
             return (chunk_data.get('content') or chunk_data.get('page_content', '')).strip()
 
-    @lf_observe(name="rag.llm.synthesize", capture_input=False, capture_output=False)
+    @lf_observe(name="rag.llm.synthesize", capture_input=False, capture_output=True)
     def _synthesize_answer(self, question: str, chunks: List[Dict], language: str, is_content_header: bool = False) -> str:
         """Synthesize an answer from multiple chunks with citations."""
         try:
@@ -2067,7 +2067,7 @@ yes or no"""
             logger.error(f"Verification error: {e}")
             return answer
 
-    @lf_observe(name="rag.llm.rephrase", capture_input=False, capture_output=False)
+    @lf_observe(name="rag.llm.rephrase", capture_input=False, capture_output=True)
     def _clean_and_rephrase_with_llm(self, text: str, language_name: str, question: str = None, answer_style: str = "exact", max_tokens: int = 512) -> str:
         """
         Use the LLM to extract exact answers from chunks or format content.
@@ -2376,6 +2376,7 @@ Snippet:
         # Attach Langfuse trace context (D. Pipeline Flow)
         update_current_trace(
             name=f"RAG: {question[:60]}",
+            user_id=str(user_token) if user_token else None,
             session_id=str(session_id) if session_id else None,
             metadata={
                 "question_id": question_id,
@@ -3184,8 +3185,11 @@ Snippet:
                         logger.info(f"[TIMING] embed={embed_t:.2f}s | retrieval={retrieval_t:.2f}s | process={process_t:.2f}s | followup_llm={followup_t:.2f}s | other={other_t:.2f}s | total={_t['total']-_t['start']:.2f}s")
 
                         # F. Performance Breakdown — record phase timings in Langfuse trace
+                        _total_s = round(_t["total"] - _t["start"], 3)
+                        _retrieval_type = "agentic" if use_agentic_retrieval else "classic"
                         update_current_trace(
                             output=combined_answer[:500] if combined_answer else "",
+                            tags=[language_name, answer_style, _retrieval_type],
                             metadata={
                                 "question_id": question_id,
                                 "language": language_name,
@@ -3198,11 +3202,17 @@ Snippet:
                                     "retrieval_s": round(retrieval_t, 3),
                                     "process_s": round(process_t, 3),
                                     "followup_s": round(followup_t, 3),
-                                    "total_s": round(_t["total"] - _t["start"], 3),
+                                    "total_s": _total_s,
                                 },
                                 "answer_style": answer_style,
-                                "retrieval_type": "agentic" if use_agentic_retrieval else "classic",
+                                "retrieval_type": _retrieval_type,
                             },
+                        )
+                        score_trace(
+                            trace_id=get_current_trace_id(),
+                            name="rag_latency_s",
+                            value=_total_s,
+                            comment=f"embed={embed_t:.1f}s  retrieval={retrieval_t:.1f}s  process={process_t:.1f}s  followup={followup_t:.1f}s",
                         )
 
                         # Report phase durations to Prometheus

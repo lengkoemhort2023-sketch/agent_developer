@@ -1,233 +1,815 @@
 {
-  "title": "DocBot System Monitor",
+  "title": "DocBot — System Monitor",
   "uid": "docbot-monitor",
-  "schemaVersion": 38,
-  "version": 2,
+  "schemaVersion": 39,
+  "version": 3,
   "refresh": "15s",
   "time": { "from": "now-1h", "to": "now" },
   "timezone": "browser",
+  "style": "dark",
+  "graphTooltip": 1,
   "tags": ["docbot"],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": { "list": [] },
+  "links": [
+    {
+      "icon": "external link",
+      "keepTime": true,
+      "tags": ["docbot"],
+      "title": "DocBot Dashboards",
+      "type": "dashboards"
+    }
+  ],
   "panels": [
 
-    { "id": 100, "title": "Django API", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false },
-
     {
-      "id": 1, "title": "HTTP Request Rate", "type": "timeseries",
+      "id": 100, "title": "Django API", "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "id": 1,
+      "title": "HTTP Request Rate",
+      "description": "Requests per second by HTTP method",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(rate(api_requests_total[5m])) by (method)", "legendFormat": "{{method}}" }],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+      "pluginVersion": "10.4.0",
+      "targets": [
+        { "expr": "sum(rate(api_requests_total[5m])) by (method)", "legendFormat": "{{method}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 2, "title": "HTTP Latency (P50 / P95 / P99)", "type": "timeseries",
+      "id": 2,
+      "title": "HTTP Latency (P50 / P95 / P99)",
+      "description": "API response time percentiles",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "pluginVersion": "10.4.0",
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
-        { "expr": "histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" },
-        { "expr": "histogram_quantile(0.99, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99" }
+        { "expr": "histogram_quantile(0.50, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99", "refId": "C" }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 3, "title": "HTTP Error Rate (4xx / 5xx)", "type": "timeseries",
+      "id": 3,
+      "title": "HTTP Error Rate (4xx / 5xx)",
+      "description": "Client and server error rates stacked",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "pluginVersion": "10.4.0",
       "targets": [
-        { "expr": "sum(rate(api_requests_total{status=~\"4..\"}[5m]))", "legendFormat": "4xx" },
-        { "expr": "sum(rate(api_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx" }
+        { "expr": "sum(rate(api_requests_total{status=~\"4..\"}[5m]))", "legendFormat": "4xx", "refId": "A" },
+        { "expr": "sum(rate(api_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx", "refId": "B" }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
 
-    { "id": 101, "title": "RAG Pipeline", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }, "collapsed": false },
-
     {
-      "id": 4, "title": "RAG Request Rate", "type": "timeseries",
+      "id": 101, "title": "RAG Pipeline", "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false
+    },
+    {
+      "id": 4,
+      "title": "RAG Request Rate",
+      "description": "Retrieval requests per second by type and status",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(rate(rag_retrievals_total[5m])) by (retriever_type, status)", "legendFormat": "{{retriever_type}} / {{status}}" }],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+      "pluginVersion": "10.4.0",
+      "targets": [
+        { "expr": "sum(rate(rag_retrievals_total[5m])) by (retriever_type, status)", "legendFormat": "{{retriever_type}} / {{status}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 5, "title": "RAG Pipeline Latency (P50 / P95)", "type": "timeseries",
+      "id": 5,
+      "title": "RAG Pipeline Latency (P50 / P95)",
+      "description": "End-to-end pipeline duration percentiles",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "pluginVersion": "10.4.0",
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
-        { "expr": "histogram_quantile(0.95, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" }
+        { "expr": "histogram_quantile(0.50, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "B" }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 6, "title": "RAG Duration Breakdown", "type": "timeseries",
+      "id": 6,
+      "title": "RAG Duration Breakdown (Avg)",
+      "description": "Average time in retrieval vs LLM generation",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "pluginVersion": "10.4.0",
       "targets": [
-        { "expr": "rate(rag_retrieval_duration_seconds_sum[5m]) / rate(rag_retrieval_duration_seconds_count[5m])", "legendFormat": "avg retrieval" },
-        { "expr": "rate(rag_llm_duration_seconds_sum[5m]) / rate(rag_llm_duration_seconds_count[5m])", "legendFormat": "avg LLM" }
+        { "expr": "rate(rag_retrieval_duration_seconds_sum[5m]) / rate(rag_retrieval_duration_seconds_count[5m])", "legendFormat": "avg retrieval", "refId": "A" },
+        { "expr": "rate(rag_llm_duration_seconds_sum[5m]) / rate(rag_llm_duration_seconds_count[5m])", "legendFormat": "avg LLM", "refId": "B" }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "avg retrieval" }, "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "avg LLM" },       "properties": [{ "id": "color", "value": { "fixedColor": "#B877D9", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
 
-    { "id": 106, "title": "User & Chat Activity", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }, "collapsed": false },
-
     {
-      "id": 23, "title": "Daily Active Users", "type": "stat",
+      "id": 106, "title": "User & Chat Activity", "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false
+    },
+    {
+      "id": 23,
+      "title": "Daily Active Users",
+      "description": "Distinct authenticated users in the last 24 h",
+      "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 19 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "increase(user_requests_total{authenticated=\"true\"}[24h])", "legendFormat": "users" }],
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }] } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "increase(user_requests_total{authenticated=\"true\"}[24h])", "legendFormat": "users", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      }
     },
     {
-      "id": 24, "title": "Daily Chat Sessions", "type": "stat",
+      "id": 24,
+      "title": "Daily Chat Sessions",
+      "description": "Chat sessions started in the last 24 h",
+      "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 19 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "increase(chat_sessions_total[24h])", "legendFormat": "sessions" }],
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 20 }, { "color": "red", "value": 50 }] } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "increase(chat_sessions_total[24h])", "legendFormat": "sessions", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 20 }, { "color": "red", "value": 50 }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      }
     },
     {
-      "id": 25, "title": "Daily Messages", "type": "stat",
+      "id": 25,
+      "title": "Daily Messages",
+      "description": "Total messages exchanged in the last 24 h",
+      "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 19 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "increase(chat_messages_total[24h])", "legendFormat": "messages" }],
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "increase(chat_messages_total[24h])", "legendFormat": "messages", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      }
     },
     {
-      "id": 26, "title": "Response Timing Breakdown", "type": "timeseries",
+      "id": 26,
+      "title": "Response Timing Breakdown (Avg per Phase)",
+      "description": "Average duration of each RAG pipeline phase. 'total' is the sum of all phases.",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "pluginVersion": "10.4.0",
       "targets": [
-        { "expr": "rate(rag_embed_duration_seconds_sum[5m]) / rate(rag_embed_duration_seconds_count[5m])", "legendFormat": "embed" },
-        { "expr": "rate(rag_retrieval_duration_seconds_sum[5m]) / rate(rag_retrieval_duration_seconds_count[5m])", "legendFormat": "retrieval" },
-        { "expr": "rate(rag_process_duration_seconds_sum[5m]) / rate(rag_process_duration_seconds_count[5m])", "legendFormat": "process" },
-        { "expr": "rate(rag_followup_duration_seconds_sum[5m]) / rate(rag_followup_duration_seconds_count[5m])", "legendFormat": "followup_llm" },
-        { "expr": "rate(rag_total_duration_seconds_sum[5m]) / rate(rag_total_duration_seconds_count[5m])", "legendFormat": "total" }
+        { "expr": "rate(rag_embed_duration_seconds_sum[5m])     / rate(rag_embed_duration_seconds_count[5m])",     "legendFormat": "embed",        "refId": "A" },
+        { "expr": "rate(rag_retrieval_duration_seconds_sum[5m]) / rate(rag_retrieval_duration_seconds_count[5m])", "legendFormat": "retrieval",    "refId": "B" },
+        { "expr": "rate(rag_process_duration_seconds_sum[5m])   / rate(rag_process_duration_seconds_count[5m])",   "legendFormat": "process",      "refId": "C" },
+        { "expr": "rate(rag_followup_duration_seconds_sum[5m])  / rate(rag_followup_duration_seconds_count[5m])",  "legendFormat": "followup_llm", "refId": "D" },
+        { "expr": "rate(rag_total_duration_seconds_sum[5m])     / rate(rag_total_duration_seconds_count[5m])",     "legendFormat": "total",        "refId": "E" }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 20 }] } } }
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 20 }] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "embed" },        "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "retrieval" },    "properties": [{ "id": "color", "value": { "fixedColor": "#B877D9", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "process" },      "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "followup_llm" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FADE2A", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "total" },        "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }, { "id": "custom.lineWidth", "value": 3 }] }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
 
-    { "id": 102, "title": "Celery Workers", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }, "collapsed": false },
-
     {
-      "id": 7, "title": "Active Celery Tasks", "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 32 },
+      "id": 102, "title": "Celery Workers", "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "collapsed": false
+    },
+    {
+      "id": 7,
+      "title": "Active Celery Tasks",
+      "description": "Currently executing tasks across all workers",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 4, "x": 0, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(celery_worker_tasks_active)", "legendFormat": "Active" }],
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "sum(celery_worker_tasks_active)", "legendFormat": "Active", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      }
     },
     {
-      "id": 8, "title": "Celery Task Rate by State", "type": "timeseries",
+      "id": 8,
+      "title": "Celery Task Rate by State",
+      "description": "Succeeded vs failed tasks per second, broken down by task name",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 20, "x": 4, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(rate(celery_task_succeeded_total[5m])) by (task_name)", "legendFormat": "succeeded: {{task_name}}" },
-        { "expr": "sum(rate(celery_task_failed_total[5m])) by (task_name)", "legendFormat": "failed: {{task_name}}" }],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+      "pluginVersion": "10.4.0",
+      "targets": [
+        { "expr": "sum(rate(celery_task_succeeded_total[5m])) by (task_name)", "legendFormat": "ok: {{task_name}}",   "refId": "A" },
+        { "expr": "sum(rate(celery_task_failed_total[5m])) by (task_name)",    "legendFormat": "fail: {{task_name}}", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
 
-    { "id": 103, "title": "System Resources", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 }, "collapsed": false },
-
     {
-      "id": 9, "title": "CPU Usage", "type": "timeseries",
+      "id": 103, "title": "System Resources", "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "collapsed": false
+    },
+    {
+      "id": 9,
+      "title": "CPU Usage",
+      "description": "System CPU utilisation (1 − idle fraction)",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m]))", "legendFormat": "CPU %" }],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] }, "custom": { "lineWidth": 2 } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m]))", "legendFormat": "CPU", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 13, "title": "Memory Usage", "type": "timeseries",
+      "id": 13,
+      "title": "Memory Usage",
+      "description": "RAM utilisation as fraction of total",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "RAM %" }],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "red", "value": 0.9 }] }, "custom": { "lineWidth": 2 } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "RAM", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.75 }, { "color": "red", "value": 0.9 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 14, "title": "GPU Utilization (RTX 5090 — prod only)", "type": "timeseries",
+      "id": 14,
+      "title": "GPU Utilisation (RTX 5090 — prod only)",
+      "description": "Compute and memory-copy utilisation from DCGM",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "pluginVersion": "10.4.0",
       "targets": [
-        { "expr": "DCGM_FI_DEV_GPU_UTIL", "legendFormat": "GPU {{gpu}} util %" },
-        { "expr": "DCGM_FI_DEV_MEM_COPY_UTIL", "legendFormat": "GPU {{gpu}} mem %" }
+        { "expr": "DCGM_FI_DEV_GPU_UTIL",      "legendFormat": "Compute % GPU {{gpu}}", "refId": "A" },
+        { "expr": "DCGM_FI_DEV_MEM_COPY_UTIL", "legendFormat": "Mem %     GPU {{gpu}}", "refId": "B" }
       ],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }, "custom": { "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 15, "title": "GPU Power & Temperature (RTX 5090 — prod only)", "type": "timeseries",
+      "id": 15,
+      "title": "GPU Power & Temperature (RTX 5090 — prod only)",
+      "description": "Power draw (W) on left axis, die temperature (°C) on right axis",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "pluginVersion": "10.4.0",
       "targets": [
-        { "expr": "DCGM_FI_DEV_POWER_USAGE", "legendFormat": "Power (W) GPU {{gpu}}" },
-        { "expr": "DCGM_FI_DEV_GPU_TEMP", "legendFormat": "Temp (°C) GPU {{gpu}}" }
+        { "expr": "DCGM_FI_DEV_POWER_USAGE", "legendFormat": "Power (W)  GPU {{gpu}}", "refId": "A" },
+        { "expr": "DCGM_FI_DEV_GPU_TEMP",   "legendFormat": "Temp (°C)  GPU {{gpu}}", "refId": "B" }
       ],
-      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "Power.*" },
+            "properties": [
+              { "id": "unit", "value": "watt" },
+              { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "Temp.*" },
+            "properties": [
+              { "id": "unit", "value": "celsius" },
+              { "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 27, "title": "Disk Usage", "type": "timeseries",
+      "id": 27,
+      "title": "Disk Usage",
+      "description": "Disk utilisation by mount point",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "host_disk_usage_percent{env=\"dev\"}", "legendFormat": "{{mountpoint}}" }],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 }] }, "custom": { "lineWidth": 2 } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "host_disk_usage_percent{env=\"dev\"}", "legendFormat": "{{mountpoint}}", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "max", "last"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
 
-    { "id": 104, "title": "Logs (Loki)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }, "collapsed": false },
-
     {
-      "id": 16, "title": "Application Logs", "type": "logs",
+      "id": 104, "title": "Logs (Loki)", "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 },
+      "collapsed": false
+    },
+    {
+      "id": 16,
+      "title": "Application Logs",
+      "type": "logs",
       "gridPos": { "h": 10, "w": 16, "x": 0, "y": 58 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service=\"amk-agent\"}", "legendFormat": "" }],
-      "options": { "showTime": true, "showLabels": true, "sortOrder": "Descending", "wrapLogMessage": true, "dedupStrategy": "none" }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "{service=\"amk-agent\"}", "legendFormat": "", "refId": "A" }],
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      }
     },
     {
-      "id": 17, "title": "Error Logs", "type": "logs",
+      "id": 17,
+      "title": "Error Logs",
+      "type": "logs",
       "gridPos": { "h": 10, "w": 8, "x": 16, "y": 58 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service=\"amk-agent\", level=\"ERROR\"}", "legendFormat": "" }],
-      "options": { "showTime": true, "showLabels": true, "sortOrder": "Descending", "wrapLogMessage": true }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "{service=\"amk-agent\", level=\"ERROR\"}", "legendFormat": "", "refId": "A" }],
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      }
     },
     {
-      "id": 18, "title": "Log Volume by Level", "type": "timeseries",
+      "id": 18,
+      "title": "Log Volume by Level",
+      "description": "Log lines per second grouped by severity",
+      "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "sum(rate({service=\"amk-agent\"}[5m])) by (level)", "legendFormat": "{{level}}" }],
-      "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "sum(rate({service=\"amk-agent\"}[5m])) by (level)", "legendFormat": "{{level}}", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ERROR" },   "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "WARNING" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "INFO" },    "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "DEBUG" },   "properties": [{ "id": "color", "value": { "fixedColor": "#8AB8FF", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "calcs": ["mean", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     },
     {
-      "id": 19, "title": "RAG Pipeline Logs", "type": "logs",
+      "id": 19,
+      "title": "RAG Pipeline Logs",
+      "type": "logs",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 68 },
       "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{service=\"amk-agent\", logger=~\"base.services.*\"}", "legendFormat": "" }],
-      "options": { "showTime": true, "showLabels": false, "sortOrder": "Descending", "wrapLogMessage": true }
+      "pluginVersion": "10.4.0",
+      "targets": [{ "expr": "{service=\"amk-agent\", logger=~\"base.services.*\"}", "legendFormat": "", "refId": "A" }],
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      }
     },
 
-    { "id": 105, "title": "Traces (Tempo)", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 76 }, "collapsed": false },
-
     {
-      "id": 20, "title": "Service Map", "type": "nodeGraph",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 77 },
-      "datasource": { "type": "tempo", "uid": "tempo" },
-      "targets": [{ "queryType": "serviceMap" }]
+      "id": 105, "title": "Traces (Tempo)", "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 76 },
+      "collapsed": false
     },
     {
-      "id": 21, "title": "Trace Search — RAG Pipeline", "type": "table",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 77 },
+      "id": 20,
+      "title": "Service Map",
+      "type": "nodeGraph",
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 77 },
       "datasource": { "type": "tempo", "uid": "tempo" },
+      "pluginVersion": "10.4.0",
+      "targets": [{ "queryType": "serviceMap", "refId": "A" }]
+    },
+    {
+      "id": 21,
+      "title": "Trace Search — RAG Pipeline",
+      "type": "table",
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 77 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "pluginVersion": "10.4.0",
       "targets": [{
         "queryType": "traceql",
         "query": "{resource.service.name=\"amk-agent\" && name=~\"rag.*\"}",
-        "tableType": "spans"
+        "tableType": "spans",
+        "refId": "A"
       }],
+      "options": { "footer": { "show": false } },
       "transformations": [{ "id": "organize", "options": { "excludeByName": {}, "renameByName": {} } }]
     },
     {
-      "id": 22, "title": "Slow Traces (>5s)", "type": "table",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 87 },
+      "id": 22,
+      "title": "Slow Traces (> 5 s)",
+      "description": "Any trace from amk-agent exceeding 5 seconds — potential bottlenecks",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 89 },
       "datasource": { "type": "tempo", "uid": "tempo" },
+      "pluginVersion": "10.4.0",
       "targets": [{
         "queryType": "traceql",
         "query": "{resource.service.name=\"amk-agent\" && duration>5s}",
-        "tableType": "traces"
-      }]
+        "tableType": "traces",
+        "refId": "A"
+      }],
+      "options": { "footer": { "show": false } }
     }
 
   ]
