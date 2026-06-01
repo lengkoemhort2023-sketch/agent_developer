@@ -16,6 +16,9 @@ from .env import load_environment
 load_environment()
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'app.core.settings')
 
+from base.utils.logging_config import configure_logging
+configure_logging(debug=os.environ.get('DEBUG', 'False').lower() == 'true')
+
 application = get_asgi_application()
 
 

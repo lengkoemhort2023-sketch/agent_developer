@@ -169,6 +169,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "base.middleware.CustomErrorHandlerMiddleware",
     "base.middlewares.connection_reset_middleware.ConnectionResetMiddleware",
+    "base.middlewares.active_users_middleware.ActiveUsersMiddleware",
     "django_prometheus.middleware.PrometheusAfterMiddleware",   # must be last
 ]
 
@@ -232,27 +233,16 @@ WSGI_APPLICATION = 'app.core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DB_ENGINE = os.environ.get("DB_ENGINE", "django.db.backends.sqlite3")
-DB_NAME = os.environ.get("DB_DATABASE", str(PROJECT_ROOT / "db.sqlite3"))
-
-if DB_ENGINE == "django.db.backends.sqlite3":
-    DATABASES = {
-        "default": {
-            "ENGINE": DB_ENGINE,
-            "NAME": DB_NAME,
-        }
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DB_DATABASE", "postgres"),
+        "USER": os.environ.get("DB_USER", "postgres"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", "postgres"),
+        "HOST": os.environ.get("DB_HOST", "localhost"),
+        "PORT": os.environ.get("DB_PORT", "5433"),
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": DB_ENGINE,
-            "NAME": DB_NAME,
-            "USER": os.environ.get("DB_USER", ""),
-            "PASSWORD": os.environ.get("DB_PASSWORD", ""),
-            "HOST": os.environ.get("DB_HOST", ""),
-            "PORT": os.environ.get("DB_PORT", ""),
-        }
-    }
+}
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "")
 CELERY_RESULT_EXTENDED = True
@@ -379,21 +369,42 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
 }
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG" if DEBUG else "INFO").upper()
+
+# Ensure logs/ dir exists before the file handler is created
+_LOG_DIR = BASE_DIR / 'logs'
+_LOG_DIR.mkdir(exist_ok=True)
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        # Clean text (no ANSI) — what Promtail reads and Loki stores
+        'file': {
+            'format': '[%(levelname)-8s] %(name)s:%(lineno)d - %(message)s',
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
         },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': str(_LOG_DIR / 'app.log'),
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 5,
+            'formatter': 'file',
+            'encoding': 'utf-8',
+        },
     },
     'root': {
-        'handlers': ['console'],
+        'handlers': ['console', 'file'],
         'level': LOG_LEVEL,
     },
     'loggers': {
-        'django_auth_ldap': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
-        'ldap': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
+        'django_auth_ldap': {'handlers': ['console', 'file'], 'level': LOG_LEVEL, 'propagate': False},
+        'ldap':             {'handlers': ['console', 'file'], 'level': LOG_LEVEL, 'propagate': False},
+        # Captures every HTTP request line from runserver
+        'django.server':    {'handlers': ['console', 'file'], 'level': 'INFO',     'propagate': False},
     },
 }
 
@@ -495,7 +506,7 @@ OTEL_ENVIRONMENT = os.environ.get("OTEL_ENVIRONMENT", "development")
 OTEL_EXPORTER_OTLP_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:5317")
 
 # Langfuse configuration (for LLM observability)
-LANGFUSE_ENABLED = env_bool("LANGFUSE_ENABLED", True)
+LANGFUSE_ENABLED = env_bool("LANGFUSE_ENABLED", False)  # off by default; set LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY to enable
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "http://localhost:3002")

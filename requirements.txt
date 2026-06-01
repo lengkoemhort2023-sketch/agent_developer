@@ -34,8 +34,7 @@ opentelemetry-exporter-otlp-proto-grpc>=1.20.0,<2.0.0
 opentelemetry-instrumentation-django>=0.41b0
 opentelemetry-instrumentation-celery>=0.41b0
 
-# Langfuse — LLM prompt/response/token observability
-langfuse>=2.0.0
+# Langfuse — LLM prompt/response/token observability (pinned below with OTel stack)
 
 # ============================================================================
 # ASYNC TASK QUEUE

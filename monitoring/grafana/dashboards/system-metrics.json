@@ -40,7 +40,7 @@
     "list": []
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-10m",
     "to": "now"
   },
   "timepicker": {
@@ -72,8 +72,8 @@
   "title": "AMK Agent",
   "uid": "amk-system-metrics",
   "schemaVersion": 39,
-  "version": 12,
-  "refresh": "15s",
+  "version": 16,
+  "refresh": "5s",
   "panels": [
     {
       "collapsed": false,
@@ -87,59 +87,6 @@
       "panels": [],
       "title": "Overview",
       "type": "row"
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 0,
-        "y": 1
-      },
-      "id": 30,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "expr": "sum(api_active_requests{job=\"django\"}) or vector(0)",
-          "legendFormat": "Active Requests",
-          "refId": "A"
-        }
-      ],
-      "title": "Active Requests",
-      "type": "stat"
     },
     {
       "datasource": "Prometheus",
@@ -173,7 +120,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 4,
+        "x": 8,
         "y": 1
       },
       "id": 6,
@@ -194,9 +141,11 @@
       "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "sum(rate(api_errors_total{job=\"django\"}[5m])) / sum(rate(api_requests_total{job=\"django\"}[5m])) * 100 or vector(0)",
+          "expr": "sum(rate(api_errors_total{job=\"django\"}[1m])) / sum(rate(api_requests_total{job=\"django\"}[1m])) * 100 or vector(0)",
           "legendFormat": "Error Rate %",
-          "refId": "A"
+          "refId": "A",
+          "instant": false,
+          "range": true
         }
       ],
       "title": "Error Rate",
@@ -234,7 +183,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 8,
+        "x": 16,
         "y": 1
       },
       "id": 80,
@@ -255,9 +204,11 @@
       "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket{job=\"django\"}[5m])) by (le)) or vector(0)",
+          "expr": "histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket{job=\"django\"}[1m])) by (le)) or vector(0)",
           "legendFormat": "P95 Latency",
-          "refId": "A"
+          "refId": "A",
+          "instant": false,
+          "range": true
         }
       ],
       "title": "P95 Latency",
@@ -308,9 +259,11 @@
       "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "sum(rate(api_requests_total{job=\"django\"}[5m])) or vector(0)",
+          "expr": "sum(rate(api_requests_total{job=\"django\"}[1m])) or vector(0)",
           "legendFormat": "RPS",
-          "refId": "A"
+          "refId": "A",
+          "instant": false,
+          "range": true
         }
       ],
       "title": "Request Rate",
@@ -340,13 +293,13 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 16,
+        "x": 20,
         "y": 1
       },
       "id": 13,
       "options": {
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
@@ -361,9 +314,11 @@
       "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "sum(chat_messages_total{job=\"django\"})",
+          "expr": "pg_stat_user_tables_n_live_tup{relname=\"chat_messages\",datname=\"postgres\"}",
           "legendFormat": "Total Messages",
-          "refId": "A"
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
       "title": "Total Messages",
@@ -371,6 +326,175 @@
     },
     {
       "datasource": "Prometheus",
+      "description": "Total registered user accounts in the system",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 5
+      },
+      "id": 90,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "expr": "pg_stat_user_tables_n_live_tup{relname=\"users\",datname=\"postgres\"}",
+          "legendFormat": "Users",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Total Users",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Chat sessions that are currently active (not archived)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 5
+      },
+      "id": 91,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "expr": "chat_sessions_active",
+          "legendFormat": "Active Sessions",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Total Chat Sessions",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Total documents in the knowledge base",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "id": 92,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "expr": "pg_stat_user_tables_n_live_tup{relname=\"documents\",datname=\"postgres\"}",
+          "legendFormat": "Documents",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Total Documents",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Unique users who made a request in the last 15 minutes",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -385,12 +509,12 @@
                 "value": null
               },
               {
-                "color": "orange",
-                "value": 50
+                "color": "yellow",
+                "value": 10
               },
               {
                 "color": "red",
-                "value": 100
+                "value": 50
               }
             ]
           },
@@ -401,10 +525,74 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 20,
+        "x": 4,
         "y": 1
       },
-      "id": 9,
+      "id": 93,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "expr": "active_users_total",
+          "legendFormat": "Online",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Active Users (Online)",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Count of databases reporting healthy (PostgreSQL + Redis + Qdrant)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2
+              },
+              {
+                "color": "green",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "/3"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "id": 74,
       "options": {
         "colorMode": "background",
         "graphMode": "area",
@@ -422,12 +610,14 @@
       "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "sum(db_connection_pool_size)",
-          "legendFormat": "DB Pool",
-          "refId": "A"
+          "expr": "(count(pg_up > 0) or vector(0)) + on() (count(redis_up > 0) or vector(0)) + on() (count(app_info > 0) or vector(0))",
+          "legendFormat": "DB Status",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
-      "title": "DB Pool",
+      "title": "DB Status",
       "type": "stat"
     },
     {
@@ -436,7 +626,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 9
       },
       "id": 82,
       "panels": [],
@@ -475,7 +665,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 6
+        "y": 10
       },
       "id": 4,
       "options": {
@@ -583,7 +773,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 6
+        "y": 10
       },
       "id": 5,
       "options": {
@@ -654,7 +844,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 6
+        "y": 10
       },
       "id": 31,
       "options": {
@@ -694,7 +884,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 18
       },
       "id": 20,
       "panels": [],
@@ -702,107 +892,51 @@
       "type": "row"
     },
     {
+      "id": 200,
+      "type": "gauge",
+      "title": "CPU",
+      "description": "Real-time CPU utilisation across all cores",
       "datasource": "Prometheus",
-      "description": "Django process CPU utilisation",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 85
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
+      "pluginVersion": "10.4.0",
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 4,
         "x": 0,
-        "y": 15
+        "y": 19
       },
-      "id": 21,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
-          "legendFormat": "CPU %",
-          "refId": "A"
+          "datasource": "Prometheus",
+          "expr": "host_cpu_percent",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
-      "title": "CPU Usage",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "Prometheus",
-      "description": "Django process resident memory in MB",
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 36
+        }
+      },
       "fieldConfig": {
         "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
           "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
+            "mode": "thresholds"
           },
           "thresholds": {
             "mode": "absolute",
@@ -810,6 +944,10 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
               },
               {
                 "color": "orange",
@@ -821,212 +959,54 @@
               }
             ]
           },
-          "unit": "percent"
+          "mappings": []
         },
         "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 15
-      },
-      "id": 22,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-          "legendFormat": "RAM %",
-          "refId": "A"
-        }
-      ],
-      "title": "Memory Usage",
-      "type": "timeseries"
+      }
     },
     {
+      "id": 201,
+      "type": "bargauge",
+      "title": "Per-Core Usage",
       "datasource": "Prometheus",
-      "description": "Network receive / transmit bytes per second (physical interfaces only)",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "unit": "Bps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 15
-      },
-      "id": 23,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
       "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "expr": "rate(node_network_receive_bytes_total{device!~\"lo|docker.*|veth.*\"}[5m])",
-          "legendFormat": "RX",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(node_network_transmit_bytes_total{device!~\"lo|docker.*|veth.*\"}[5m])",
-          "legendFormat": "TX",
-          "refId": "B"
-        }
-      ],
-      "title": "Network I/O",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "Prometheus",
-      "description": "Disk utilisation by mount point",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 85
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 8,
         "x": 0,
-        "y": 23
+        "y": 27
       },
-      "id": 24,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "host_disk_usage_percent or vector(0)",
-          "legendFormat": "Disk %",
-          "refId": "A"
+          "datasource": "Prometheus",
+          "expr": "sort_desc(host_cpu_core_percent)",
+          "legendFormat": "Core {{core}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
-      "title": "Disk Usage",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "Prometheus",
-      "description": "GPU compute and framebuffer memory utilisation from DCGM \u2014 production only",
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "displayMode": "lcd",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "text": {}
+      },
       "fieldConfig": {
         "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
           "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
+            "mode": "thresholds"
           },
           "thresholds": {
             "mode": "absolute",
@@ -1034,6 +1014,10 @@
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
               },
               {
                 "color": "orange",
@@ -1041,58 +1025,66 @@
               },
               {
                 "color": "red",
-                "value": 95
+                "value": 90
               }
             ]
           },
-          "unit": "percent"
+          "mappings": []
         },
         "overrides": []
-      },
+      }
+    },
+    {
+      "id": 202,
+      "type": "timeseries",
+      "title": "CPU / RAM / GPU Trend",
+      "description": "Real-time CPU %, RAM %, and GPU % on one chart",
+      "datasource": "Prometheus",
+      "pluginVersion": "10.4.0",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 23
+        "w": 12,
+        "x": 12,
+        "y": 19
       },
-      "id": 25,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "host_cpu_percent",
+          "legendFormat": "CPU %",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "host_memory_percent",
+          "legendFormat": "RAM %",
+          "refId": "B"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "host_gpu_device_percent",
+          "legendFormat": "GPU %",
+          "refId": "C"
+        }
+      ],
       "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
         "legend": {
           "calcs": [
-            "mean",
-            "max",
-            "last"
+            "last",
+            "max"
           ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
         }
       },
-      "pluginVersion": "10.4.0",
-      "targets": [
-        {
-          "expr": "DCGM_FI_DEV_GPU_UTIL or vector(0)",
-          "legendFormat": "Compute %",
-          "refId": "A"
-        },
-        {
-          "expr": "DCGM_FI_DEV_FB_USED / (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE) * 100 or vector(0)",
-          "legendFormat": "Memory %",
-          "refId": "B"
-        }
-      ],
-      "title": "GPU Utilisation (NVIDIA)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "Prometheus",
-      "description": "GPU power draw (W, left axis) and die temperature (\u00b0C, right axis) \u2014 production only",
       "fieldConfig": {
         "defaults": {
+          "unit": "percent",
           "color": {
             "mode": "palette-classic"
           },
@@ -1103,1587 +1095,682 @@
             "lineWidth": 2,
             "pointSize": 5,
             "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "Power.*"
-            },
-            "properties": [
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "id": "unit",
-                "value": "watt"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FF9830",
-                  "mode": "fixed"
-                }
+                "color": "green",
+                "value": null
               }
             ]
           },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "Temp.*"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "celsius"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#F2495C",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              }
-            ]
-          }
-        ]
-      },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 203,
+      "type": "gauge",
+      "title": "RAM",
+      "description": "Physical RAM utilisation",
+      "datasource": "Prometheus",
+      "pluginVersion": "10.4.0",
       "gridPos": {
         "h": 8,
+        "w": 4,
+        "x": 4,
+        "y": 19
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "host_memory_percent",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 36
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 204,
+      "type": "stat",
+      "title": "Memory Breakdown",
+      "description": "Used / Free / Wired (kernel) / Swap",
+      "datasource": "Prometheus",
+      "pluginVersion": "10.4.0",
+      "gridPos": {
+        "h": 7,
         "w": 8,
         "x": 16,
-        "y": 23
+        "y": 27
       },
-      "id": 26,
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "host_memory_used_bytes",
+          "legendFormat": "Used",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "host_memory_available_bytes",
+          "legendFormat": "Free",
+          "refId": "B",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "host_memory_wired_bytes",
+          "legendFormat": "Wired",
+          "refId": "C",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "host_swap_used_bytes",
+          "legendFormat": "Swap Used",
+          "refId": "D",
+          "instant": true,
+          "range": false
+        }
+      ],
       "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "text": {}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+
+    {
+      "id": 208,
+      "type": "timeseries",
+      "title": "Network I/O",
+      "description": "",
+      "datasource": "Prometheus",
+      "pluginVersion": "10.4.0",
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(host_network_bytes_recv_total{interface=~\"en.*\"}[30s])",
+          "legendFormat": "Recv {{interface}}",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(host_network_bytes_sent_total{interface=~\"en.*\"}[30s])",
+          "legendFormat": "Send {{interface}}",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
         "legend": {
           "calcs": [
-            "mean",
-            "max",
-            "last"
+            "last",
+            "max"
           ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
         },
+        "overrides": []
+      }
+    },
+
+    {
+      "id": 211,
+      "type": "timeseries",
+      "title": "Disk I/O",
+      "description": "",
+      "datasource": "Prometheus",
+      "pluginVersion": "10.4.0",
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(host_diskio_read_bytes_total{device=~\"disk[0-9]+\"}[30s])",
+          "legendFormat": "Read {{device}}",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(host_diskio_write_bytes_total{device=~\"disk[0-9]+\"}[30s])",
+          "legendFormat": "Write {{device}}",
+          "refId": "B"
+        }
+      ],
+      "options": {
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
+        },
+        "legend": {
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
         }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 212,
+      "type": "gauge",
+      "title": "GPU",
+      "description": "Apple Silicon GPU overall active residency",
+      "datasource": "Prometheus",
+      "pluginVersion": "10.4.0",
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 8,
+        "y": 19
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "host_gpu_device_percent",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 36
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 213,
+      "type": "bargauge",
+      "title": "GPU Pipelines",
+      "datasource": "Prometheus",
+      "pluginVersion": "10.4.0",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 27
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "host_gpu_renderer_percent",
+          "legendFormat": "Renderer",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "host_gpu_tiler_percent",
+          "legendFormat": "Tiler",
+          "refId": "B",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "displayMode": "lcd",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "text": {}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "id": 70,
+      "panels": [],
+      "title": "C. Cache & Storage",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Number of clients connected to Redis",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 40
+      },
+      "id": 71,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
       },
       "pluginVersion": "10.4.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_POWER_USAGE or vector(0)",
-          "legendFormat": "Power (W)",
-          "refId": "A"
-        },
-        {
-          "expr": "DCGM_FI_DEV_GPU_TEMP or vector(0)",
-          "legendFormat": "Temp (\u00b0C)",
-          "refId": "B"
+          "expr": "redis_connected_clients",
+          "legendFormat": "Connected Clients",
+          "refId": "A",
+          "instant": true,
+          "range": false
         }
       ],
-      "title": "GPU Power & Temp (NVIDIA)",
-      "type": "timeseries"
+      "title": "Redis Clients",
+      "type": "stat"
     },
     {
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 31
-      },
-      "id": 7,
-      "panels": [
-        {
-          "datasource": "Prometheus",
-          "description": "Current open connections to PostgreSQL",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 50
-                  },
-                  {
-                    "color": "red",
-                    "value": 100
-                  }
-                ]
-              },
-              "unit": "short"
-            },
-            "overrides": []
+      "datasource": "Prometheus",
+      "description": "Total collections and vectors in Qdrant",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
           },
-          "gridPos": {
-            "h": 4,
-            "w": 6,
-            "x": 0,
-            "y": 0
-          },
-          "id": 40,
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "pg_stat_activity_count{datname=\"postgres\"}",
-              "legendFormat": "Active Connections",
-              "refId": "A"
-            }
-          ],
-          "title": "Active Connections",
-          "type": "stat"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "Configured maximum connection pool size",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              },
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 4,
-            "w": 6,
-            "x": 6,
-            "y": 0
-          },
-          "id": 83,
-          "options": {
-            "colorMode": "background",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "db_connection_pool_size",
-              "legendFormat": "Pool Max",
-              "refId": "A"
-            }
-          ],
-          "title": "Pool Max Size",
-          "type": "stat"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "Active connections as a percentage of pool max \u2014 watch for saturation",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 60
-                  },
-                  {
-                    "color": "red",
-                    "value": 85
-                  }
-                ]
-              },
-              "unit": "percent"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 4,
-            "w": 6,
-            "x": 12,
-            "y": 0
-          },
-          "id": 84,
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "pg_stat_activity_count{datname=\"postgres\"} / db_connection_pool_size * 100",
-              "legendFormat": "Utilisation %",
-              "refId": "A"
-            }
-          ],
-          "title": "Pool Utilisation",
-          "type": "stat"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "Transaction rollbacks per second \u2014 elevated values indicate application errors",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 1
-                  },
-                  {
-                    "color": "red",
-                    "value": 5
-                  }
-                ]
-              },
-              "unit": "cps"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 4,
-            "w": 6,
-            "x": 18,
-            "y": 0
-          },
-          "id": 85,
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "rate(pg_stat_database_xact_rollback_total{datname=\"postgres\"}[5m])",
-              "legendFormat": "Rollbacks/s",
-              "refId": "A"
-            }
-          ],
-          "title": "Rollback Rate",
-          "type": "stat"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "p95 query latency broken down by table and SQL operation \u2014 threshold lines at 500 ms and 1 s",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "line"
-                }
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 0.5
-                  },
-                  {
-                    "color": "red",
-                    "value": 1
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 4
-          },
-          "id": 8,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "max",
-                "last"
-              ],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(db_query_duration_seconds_bucket[5m])) by (le, table, operation))",
-              "legendFormat": "{{table}} / {{operation}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Query Duration (p95)",
-          "type": "timeseries"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "PostgreSQL commit rate (green) vs rollback rate (red) over time",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "unit": "cps"
-            },
-            "overrides": [
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Commits/s"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#73BF69",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Rollbacks/s"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#F2495C",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
+                "color": "blue",
+                "value": null
               }
             ]
           },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 4
-          },
-          "id": 41,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "max",
-                "last"
-              ],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "rate(pg_stat_database_xact_commit_total{datname=\"postgres\"}[5m])",
-              "legendFormat": "Commits/s",
-              "refId": "A"
-            },
-            {
-              "expr": "rate(pg_stat_database_xact_rollback_total{datname=\"postgres\"}[5m])",
-              "legendFormat": "Rollbacks/s",
-              "refId": "B"
-            }
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 40
+      },
+      "id": 72,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
           ],
-          "title": "Transactions / s",
-          "type": "timeseries"
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "expr": "collections_total",
+          "legendFormat": "Collections",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        },
+        {
+          "expr": "collections_vector_total",
+          "legendFormat": "Total Vectors",
+          "refId": "B",
+          "instant": true,
+          "range": false
         }
       ],
-      "title": "C. Database",
-      "type": "row"
+      "title": "Qdrant",
+      "type": "stat"
     },
     {
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 32
-      },
-      "id": 10,
-      "panels": [
-        {
-          "datasource": "Prometheus",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              },
-              "unit": "short"
-            },
-            "overrides": []
+      "datasource": "Prometheus",
+      "description": "PostgreSQL database connections and transaction rate",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
           },
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 0,
-            "y": 0
-          },
-          "id": 12,
-          "options": {
-            "colorMode": "background",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "sum(chat_sessions_total{job=\"django\"})",
-              "legendFormat": "Chat Sessions",
-              "refId": "A"
-            }
-          ],
-          "title": "Chat Sessions",
-          "type": "stat"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "Requests per second split by authentication status",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "unit": "cps"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 8,
-            "x": 4,
-            "y": 0
-          },
-          "id": 11,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "sum"
-              ],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "sum(rate(user_requests_total{job=\"django\"}[5m])) by (authenticated)",
-              "legendFormat": "{{authenticated}}",
-              "refId": "A"
-            }
-          ],
-          "title": "User Requests/s",
-          "type": "timeseries"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "Chat message and session creation rates",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "unit": "cps"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 0
-          },
-          "id": 14,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "sum"
-              ],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "rate(chat_messages_total{job=\"django\"}[5m])",
-              "legendFormat": "Messages/s",
-              "refId": "A"
-            },
-            {
-              "expr": "rate(chat_sessions_total{job=\"django\"}[5m])",
-              "legendFormat": "Sessions/s",
-              "refId": "B"
-            }
-          ],
-          "title": "Chat Activity",
-          "type": "timeseries"
-        }
-      ],
-      "title": "D. User Activity",
-      "type": "row"
-    },
-    {
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 33
-      },
-      "id": 15,
-      "panels": [
-        {
-          "datasource": "Prometheus",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 5
-                  },
-                  {
-                    "color": "red",
-                    "value": 10
-                  }
-                ]
-              },
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 0,
-            "y": 0
-          },
-          "id": 50,
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "celery_worker_up",
-              "legendFormat": "Up",
-              "refId": "A"
-            },
-            {
-              "expr": "celery_workers",
-              "legendFormat": "Total",
-              "refId": "B"
-            }
-          ],
-          "title": "Celery Workers",
-          "type": "stat"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "p95 task execution duration by task name",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "line"
-                }
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 30
-                  },
-                  {
-                    "color": "red",
-                    "value": 60
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 10,
-            "x": 4,
-            "y": 0
-          },
-          "id": 16,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "max",
-                "last"
-              ],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(celery_task_duration_seconds_bucket[5m])) by (le, task_name))",
-              "legendFormat": "{{task_name}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Task Duration (p95)",
-          "type": "timeseries"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "Tasks per second broken down by task name and status",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "unit": "cps"
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 10,
-            "x": 14,
-            "y": 0
-          },
-          "id": 17,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "sum"
-              ],
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "sum(rate(celery_tasks_total[5m])) by (task_name, status)",
-              "legendFormat": "{{task_name}} / {{status}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Tasks/s by Status",
-          "type": "timeseries"
-        }
-      ],
-      "title": "E. Celery / Concurrency",
-      "type": "row"
-    },
-    {
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 34
-      },
-      "id": 70,
-      "title": "F. RAG Pipeline",
-      "type": "row",
-      "panels": [
-        {
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 5
-                  },
-                  {
-                    "color": "red",
-                    "value": 15
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "type": "stat",
-          "pluginVersion": "10.4.0",
-          "datasource": "Prometheus",
-          "gridPos": {
-            "h": 4,
-            "w": 8,
-            "x": 0,
-            "y": 0
-          },
-          "id": 76,
-          "description": "Rolling 5-minute average end-to-end RAG pipeline latency",
-          "targets": [
-            {
-              "expr": "rate(rag_total_duration_seconds_sum[5m]) / rate(rag_total_duration_seconds_count[5m])",
-              "legendFormat": "Avg Duration",
-              "refId": "A"
-            }
-          ],
-          "title": "Avg Total Duration"
-        },
-        {
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 10
-                  },
-                  {
-                    "color": "red",
-                    "value": 20
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "type": "stat",
-          "pluginVersion": "10.4.0",
-          "datasource": "Prometheus",
-          "gridPos": {
-            "h": 4,
-            "w": 8,
-            "x": 8,
-            "y": 0
-          },
-          "id": 77,
-          "description": "p95 end-to-end duration \u2014 95% of queries finish within this time",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "p95 Duration",
-              "refId": "A"
-            }
-          ],
-          "title": "p95 Total Duration"
-        },
-        {
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              },
-              "unit": "reqps"
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "type": "stat",
-          "pluginVersion": "10.4.0",
-          "datasource": "Prometheus",
-          "gridPos": {
-            "h": 4,
-            "w": 8,
-            "x": 16,
-            "y": 0
-          },
-          "id": 78,
-          "description": "RAG retrieval requests per second across all retriever types",
-          "targets": [
-            {
-              "expr": "sum(rate(rag_retrievals_total[5m]))",
-              "legendFormat": "Request Rate",
-              "refId": "A"
-            }
-          ],
-          "title": "Request Rate"
-        },
-        {
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 5
-                  },
-                  {
-                    "color": "red",
-                    "value": 15
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "type": "stat",
-          "pluginVersion": "10.4.0",
-          "datasource": "Prometheus",
-          "gridPos": {
-            "h": 4,
-            "w": 8,
-            "x": 0,
-            "y": 4
-          },
-          "id": 72,
-          "description": "p95 LLM generation latency aggregated across all models",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_llm_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "LLM p95",
-              "refId": "A"
-            }
-          ],
-          "title": "LLM Duration (p95)"
-        },
-        {
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 2
-                  },
-                  {
-                    "color": "red",
-                    "value": 5
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "type": "stat",
-          "pluginVersion": "10.4.0",
-          "datasource": "Prometheus",
-          "gridPos": {
-            "h": 4,
-            "w": 8,
-            "x": 8,
-            "y": 4
-          },
-          "id": 73,
-          "description": "p95 vector retrieval latency aggregated across all retriever types",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "Retrieval p95",
-              "refId": "A"
-            }
-          ],
-          "title": "Retrieval Duration (p95)"
-        },
-        {
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "blue",
-                    "value": null
-                  }
-                ]
-              },
-              "unit": "reqps"
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "background",
-            "graphMode": "area",
-            "justifyMode": "center",
-            "orientation": "auto",
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "textMode": "value_and_name"
-          },
-          "type": "stat",
-          "pluginVersion": "10.4.0",
-          "datasource": "Prometheus",
-          "gridPos": {
-            "h": 4,
-            "w": 8,
-            "x": 16,
-            "y": 4
-          },
-          "id": 75,
-          "description": "Total retrieval throughput across all retriever types and statuses",
-          "targets": [
-            {
-              "expr": "sum(rate(rag_retrievals_total[5m]))",
-              "legendFormat": "Retrieval Rate",
-              "refId": "A"
-            }
-          ],
-          "title": "Retrieval Rate"
-        },
-        {
-          "datasource": "Prometheus",
-          "description": "End-to-end RAG pipeline latency percentiles \u2014 p50 (green) / p95 (orange) / p99 (red)",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "line+area"
-                }
-              },
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 5
-                  },
-                  {
-                    "color": "red",
-                    "value": 15
-                  }
-                ]
-              },
-              "unit": "s"
-            },
-            "overrides": [
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "matcher": {
-                  "id": "byName",
-                  "options": "p50"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#73BF69",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
+                "color": "green",
+                "value": null
               },
               {
-                "matcher": {
-                  "id": "byName",
-                  "options": "p95"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#FF9830",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
+                "color": "orange",
+                "value": 20
               },
               {
-                "matcher": {
-                  "id": "byName",
-                  "options": "p99"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#F2495C",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
+                "color": "red",
+                "value": 50
               }
             ]
           },
-          "gridPos": {
-            "h": 8,
-            "w": 24,
-            "x": 0,
-            "y": 8
-          },
-          "id": 71,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "max",
-                "last"
-              ],
-              "displayMode": "table",
-              "placement": "right",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.50, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "p50",
-              "refId": "A"
-            },
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "p95",
-              "refId": "B"
-            },
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(rag_total_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "p99",
-              "refId": "C"
-            }
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 40
+      },
+      "id": 73,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
           ],
-          "title": "Total RAG Duration",
-          "type": "timeseries"
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "expr": "pg_stat_database_numbackends{datname=\"postgres\"}",
+          "legendFormat": "Connections",
+          "refId": "A",
+          "instant": true,
+          "range": false
         },
         {
-          "datasource": "Prometheus",
-          "description": "p95 latency for each stage \u2014 embed (blue) \u2192 retrieval (purple) \u2192 process (orange) \u2192 follow-up LLM (yellow)",
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "lineWidth": 2,
-                "pointSize": 5,
-                "showPoints": "never",
-                "spanNulls": false,
-                "stacking": {
-                  "group": "A",
-                  "mode": "none"
-                },
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "unit": "s"
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Embed"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#5794F2",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Retrieval"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#B877D9",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Process"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#FF9830",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "Follow-up"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "#FADE2A",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 24,
-            "x": 0,
-            "y": 16
-          },
-          "id": 74,
-          "options": {
-            "legend": {
-              "calcs": [
-                "mean",
-                "max",
-                "last"
-              ],
-              "displayMode": "table",
-              "placement": "right",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "pluginVersion": "10.4.0",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_embed_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "Embed",
-              "refId": "A"
-            },
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "Retrieval",
-              "refId": "B"
-            },
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_process_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "Process",
-              "refId": "C"
-            },
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(rag_followup_duration_seconds_bucket[5m])) by (le))",
-              "legendFormat": "Follow-up",
-              "refId": "D"
-            }
-          ],
-          "title": "Phase Latency (p95) \u2014 all stages",
-          "type": "timeseries"
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"postgres\"}[1m])",
+          "legendFormat": "Tx/s",
+          "refId": "B",
+          "instant": true,
+          "range": false
         }
-      ]
+      ],
+      "title": "PostgreSQL",
+      "type": "stat"
     },
     {
       "collapsed": true,
@@ -2691,7 +1778,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 46
       },
       "id": 60,
       "panels": [
@@ -2705,7 +1792,7 @@
             "h": 10,
             "w": 24,
             "x": 0,
-            "y": 0
+            "y": 4
           },
           "id": 61,
           "options": {
@@ -2723,7 +1810,11 @@
             {
               "expr": "{job=\"django\"}",
               "legendFormat": "",
-              "refId": "A"
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              }
             }
           ],
           "title": "All Logs",
@@ -2739,7 +1830,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 10
+            "y": 14
           },
           "id": 62,
           "options": {
@@ -2755,9 +1846,13 @@
           "pluginVersion": "10.4.0",
           "targets": [
             {
-              "expr": "{job=\"django\", level=\"ERROR\"}",
+              "expr": "{job=\"django\"} |= \"[ERROR\"",
               "legendFormat": "",
-              "refId": "A"
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              }
             }
           ],
           "title": "Error Logs",
@@ -2773,7 +1868,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 10
+            "y": 14
           },
           "id": 63,
           "options": {
@@ -2789,16 +1884,20 @@
           "pluginVersion": "10.4.0",
           "targets": [
             {
-              "expr": "{job=\"django\", level=\"WARNING\"}",
+              "expr": "{job=\"django\"} |= \"[WARNING\"",
               "legendFormat": "",
-              "refId": "A"
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              }
             }
           ],
           "title": "Warning Logs",
           "type": "logs"
         }
       ],
-      "title": "G. Logs (Loki)",
+      "title": "D. Logs (Loki)",
       "type": "row"
     }
   ]

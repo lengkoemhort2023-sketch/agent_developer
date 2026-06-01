@@ -21,6 +21,7 @@ services:
 
     db:
         image: postgres:15
+        pull_policy: missing
         ports:
             - 5433:5432
         volumes:
@@ -35,6 +36,7 @@ services:
 
     qdrant:
         image: qdrant/qdrant:latest
+        pull_policy: missing
         ports:
             - 6333:6333
         volumes:
@@ -47,6 +49,7 @@ services:
 
     redis:
         image: redis:alpine
+        pull_policy: missing
         ports:
             - 6380:6379
         volumes:
@@ -237,6 +240,7 @@ services:
 
     postgres-exporter:
         image: prometheuscommunity/postgres-exporter:latest
+        pull_policy: missing
         environment:
             - DATA_SOURCE_NAME=postgresql://postgres:postgres@db:5432/postgres?sslmode=disable
         depends_on:
@@ -247,6 +251,7 @@ services:
 
     redis-exporter:
         image: oliver006/redis_exporter:latest
+        pull_policy: missing
         environment:
             - REDIS_ADDR=redis://redis:6379
         depends_on:

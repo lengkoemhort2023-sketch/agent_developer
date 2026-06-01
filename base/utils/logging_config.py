@@ -106,15 +106,20 @@ def configure_logging(debug: bool = False) -> None:
         'version': 1,
         'disable_existing_loggers': False,
         'formatters': {
-            'verbose': {
+            # Console: colourised readable text (ANSI OK — goes to terminal)
+            'console': {
                 '()': ReadableFormatter if debug else JSONFormatter,
+            },
+            # File: clean text without ANSI — Promtail reads this
+            'file': {
+                'format': '[%(levelname)-8s] %(name)s:%(lineno)d - %(message)s',
             },
         },
         'handlers': {
             'console': {
                 'class': 'logging.StreamHandler',
                 'stream': sys.stdout,
-                'formatter': 'verbose',
+                'formatter': 'console',
                 'level': 'DEBUG' if debug else 'INFO',
             },
             'file': {
@@ -122,16 +127,18 @@ def configure_logging(debug: bool = False) -> None:
                 'filename': 'logs/app.log',
                 'maxBytes': 10485760,  # 10MB
                 'backupCount': 10,
-                'formatter': 'verbose',
+                'formatter': 'file',
                 'level': 'INFO',
+                'encoding': 'utf-8',
             },
             'security': {
                 'class': 'logging.handlers.RotatingFileHandler',
                 'filename': 'logs/security.log',
                 'maxBytes': 10485760,  # 10MB
-                'backupCount': 30,  # Keep more security logs
-                'formatter': 'verbose',
+                'backupCount': 30,
+                'formatter': 'file',
                 'level': 'WARNING',
+                'encoding': 'utf-8',
             },
         },
         'loggers': {
@@ -190,6 +197,12 @@ def configure_logging(debug: bool = False) -> None:
             'django.request': {
                 'handlers': ['console', 'file'],
                 'level': 'ERROR',
+                'propagate': False,
+            },
+            # HTTP request lines from `runserver` (e.g. "GET /api/v1/ 200")
+            'django.server': {
+                'handlers': ['console', 'file'],
+                'level': 'INFO',
                 'propagate': False,
             },
         },

@@ -23,6 +23,13 @@ from typing import List, Dict, Any, Optional
 import re
 import psutil
 from app.core.observability import observability
+
+_CONN_REFUSED_MARKERS = ("Connection refused", "ECONNREFUSED", "Errno 61", "Errno 111", "Connection reset")
+
+def _is_ollama_unavailable(exc: Exception) -> bool:
+    """Return True when the exception is a low-level connection failure to Ollama."""
+    msg = str(exc)
+    return any(m in msg for m in _CONN_REFUSED_MARKERS)
 from base.monitoring.langfuse_tracer import (
     register_trace,
     get_trace_id,
@@ -688,7 +695,10 @@ yes or no"""
             return (is_valid, reason)
             
         except Exception as e:
-            logger.error(f"Error verifying query: {e}")
+            if _is_ollama_unavailable(e):
+                logger.warning(f"Ollama unavailable during query verification (fail-open): {e}")
+            else:
+                logger.error(f"Error verifying query: {e}")
             # On error, accept query (fail open)
             return (True, f"Verification error, accepting query: {str(e)}")
     
@@ -1911,7 +1921,10 @@ yes or no"""
             return body
 
         except Exception as e:
-            logger.error(f"llm_content error: {e}")
+            if _is_ollama_unavailable(e):
+                logger.warning(f"Ollama unavailable in llm_content (using fallback): {e}")
+            else:
+                logger.error(f"llm_content error: {e}")
             update_current_observation(
                 metadata={"error": str(e), "status": "error"},
                 level="ERROR",
@@ -2275,7 +2288,10 @@ Snippet:
                 return cleaned
                 
         except Exception as e:
-            logger.error(f"LLM answer extraction error: {e}")
+            if _is_ollama_unavailable(e):
+                logger.warning(f"Ollama unavailable during answer extraction (using fallback): {e}")
+            else:
+                logger.error(f"LLM answer extraction error: {e}")
             
         return self._format_response_output(text)
 

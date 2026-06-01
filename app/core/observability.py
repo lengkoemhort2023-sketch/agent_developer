@@ -10,17 +10,10 @@ This module configures:
 
 import os
 import logging
-import logging.handlers
 import json
 import threading
-import warnings
 from datetime import datetime, timezone
 from typing import Optional
-
-# Must come before OpenTelemetry imports — pkg_resources warns at import time.
-warnings.filterwarnings("ignore", category=UserWarning, module="opentelemetry")
-warnings.filterwarnings("ignore", category=UserWarning, module="pkg_resources")
-logging.getLogger("opentelemetry.instrumentation").setLevel(logging.CRITICAL)
 
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -29,6 +22,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.django import DjangoInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from opentelemetry.instrumentation.celery import CeleryInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry import trace, metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
@@ -195,6 +189,12 @@ def init_prometheus_metrics():
         registry=REGISTRY
     )
 
+    chat_sessions_active = Gauge(
+        "chat_sessions_active",
+        "Active (non-archived) chat sessions",
+        registry=REGISTRY
+    )
+
     chat_messages = Counter(
         "chat_messages_total",
         "Total chat messages sent",
@@ -246,6 +246,13 @@ def init_prometheus_metrics():
         registry=REGISTRY
     )
 
+    # Real-time active users (updated by ActiveUsersMiddleware via Redis sorted set)
+    active_users = Gauge(
+        "active_users_total",
+        "Unique authenticated users active in the last 15 minutes",
+        registry=REGISTRY
+    )
+
     return {
         "api_requests": api_requests,
         "api_latency": api_latency,
@@ -259,6 +266,7 @@ def init_prometheus_metrics():
         "rag_followup_duration": rag_followup_duration,
         "user_requests": user_requests,
         "chat_sessions": chat_sessions,
+        "chat_sessions_active": chat_sessions_active,
         "chat_messages": chat_messages,
         "db_query_duration": db_query_duration,
         "db_connection_pool": db_connection_pool,
@@ -266,6 +274,7 @@ def init_prometheus_metrics():
         "celery_tasks_total": celery_tasks_total,
         "active_requests": active_requests,
         "timeout_errors": timeout_errors,
+        "active_users": active_users,
     }
 
 
@@ -293,11 +302,13 @@ def init_otel_tracing():
         trace.set_tracer_provider(tracer_provider)
         
         # Instrument frameworks
-        for instr in [DjangoInstrumentor, RequestsInstrumentor, CeleryInstrumentor]:
-            try:
-                instr().instrument()
-            except Exception:
-                pass
+        DjangoInstrumentor().instrument()
+        RequestsInstrumentor().instrument()
+        CeleryInstrumentor().instrument()
+        try:
+            SQLAlchemyInstrumentor().instrument()
+        except Exception:
+            pass  # Only applies when project uses SQLAlchemy directly
 
         return tracer_provider
     except Exception as e:
@@ -364,18 +375,6 @@ def setup_structured_logging(log_level: str = "INFO"):
     console_handler.setFormatter(JSONFormatter())
     console_handler.addFilter(RequestContextFilter())
     root_logger.addHandler(console_handler)
-
-    # Also ship JSON logs to file for Promtail → Loki
-    try:
-        os.makedirs("logs", exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
-            "logs/app.log", maxBytes=10_485_760, backupCount=3
-        )
-        file_handler.setFormatter(JSONFormatter())
-        file_handler.addFilter(RequestContextFilter())
-        root_logger.addHandler(file_handler)
-    except Exception:
-        pass
     
     # Setup Django loggers
     django_logger = logging.getLogger("django")

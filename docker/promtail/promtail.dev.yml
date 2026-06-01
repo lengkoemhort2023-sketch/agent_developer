@@ -21,14 +21,11 @@ scrape_configs:
           service: amk-agent
           __path__: /logs/app.log
     pipeline_stages:
-      - json:
-          expressions:
-            level: level
-            logger: logger
-            message: message
+      # Extract level from [LEVELNAME] at the start of each line
+      - regex:
+          expression: '^\[(?P<level>[A-Z]+)'
       - labels:
           level:
-          logger:
 
   - job_name: django-security
     static_configs:
@@ -40,11 +37,7 @@ scrape_configs:
           service: docbot-security
           __path__: /logs/security.log
     pipeline_stages:
-      - json:
-          expressions:
-            level: level
-            logger: logger
-            message: message
+      - regex:
+          expression: '^\[(?P<level>[A-Z]+)'
       - labels:
           level:
-          logger:
